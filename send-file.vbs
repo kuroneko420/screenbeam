@@ -18,51 +18,34 @@
 '       e.g. C:\Users\YourName\Desktop\sender.html
 '
 '   Action 3: "Run VBScript"
-'     - Paste this entire script into the code box.
-'     - PAD substitutes %SelectedFile% and %SenderPath% with their
-'       values before running. No command line arguments needed.
+'     - Paste everything below the dashed line into the code box.
+'     - PAD replaces %SelectedFile% and %SenderPath% with their
+'       values before running.
 '
-' You can also run this from cscript if command prompt is available:
-'   cscript send-file.vbs "C:\path\to\file.pdf" "C:\path\to\sender.html"
+' ---------------------------------------------------------------
 
 Dim fso
 Set fso = CreateObject("Scripting.FileSystemObject")
 
-' When run from PAD, these %variables% are replaced before execution.
-' When run from cscript, they stay as literal strings and we fall
-' through to WScript.Arguments instead.
 Dim filePath
-Dim senderPath
+filePath = "%SelectedFile%"
 
-If InStr("%SelectedFile%", "%") = 0 Then
-  filePath = "%SelectedFile%"
-  senderPath = "%SenderPath%"
-Else
-  filePath = WScript.Arguments(0)
-  If WScript.Arguments.Count > 1 Then
-    senderPath = WScript.Arguments(1)
-  Else
-    senderPath = fso.BuildPath(fso.GetParentFolderName(WScript.ScriptFullName), "sender.html")
-    If Not fso.FileExists(senderPath) Then
-      senderPath = fso.BuildPath(fso.GetParentFolderName(WScript.ScriptFullName), "dist\sender.html")
-    End If
-  End If
-End If
+Dim senderPath
+senderPath = "%SenderPath%"
 
 If Not fso.FileExists(filePath) Then
-  WScript.Echo "File not found: " & filePath
+  MsgBox "File not found: " & filePath, vbCritical, "screenbeam"
   WScript.Quit 1
 End If
 
 If Not fso.FileExists(senderPath) Then
-  WScript.Echo "sender.html not found at: " & senderPath
+  MsgBox "sender.html not found at: " & senderPath, vbCritical, "screenbeam"
   WScript.Quit 1
 End If
 
 Dim fileName
 fileName = fso.GetFileName(filePath)
 
-' Read file as binary via ADODB.Stream
 Dim stream
 Set stream = CreateObject("ADODB.Stream")
 stream.Type = 1
@@ -72,7 +55,6 @@ Dim fileBytes
 fileBytes = stream.Read
 stream.Close
 
-' Base64 encode via MSXML DOM node
 Dim xml
 Set xml = CreateObject("MSXML2.DOMDocument.6.0")
 Dim node
@@ -82,21 +64,16 @@ node.NodeTypedValue = fileBytes
 Dim b64
 b64 = Replace(Replace(node.Text, vbCr, ""), vbLf, "")
 
-' Read sender.html
 Dim htmlFile
 Set htmlFile = fso.OpenTextFile(senderPath, 1)
 Dim html
 html = htmlFile.ReadAll
 htmlFile.Close
 
-' Inject the file payload as a JS global before </body>.
-' The sender checks for window.__SCREENBEAM__ on startup and
-' skips the file picker if it exists.
 Dim injection
 injection = "<script>window.__SCREENBEAM__={data:""" & b64 & """,filename:""" & fileName & """};</script>"
 html = Replace(html, "</body>", injection & vbCrLf & "</body>")
 
-' Write to temp folder and open in default browser
 Dim tempPath
 tempPath = fso.BuildPath(fso.GetSpecialFolder(2), "screenbeam-send.html")
 Dim outFile
