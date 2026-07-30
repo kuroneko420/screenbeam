@@ -1,7 +1,7 @@
 import QRCode from 'qrcode';
 import { LTEncoder } from '../shared/fountain.js';
 import { HEADER_LEN, fnv1a, packFrame } from '../shared/protocol.js';
-import { COLORS, FINDER_SIZE, FINDER_PATTERN, getFinderPositions, getDataCells, bytesPerFrame, encodeGrid } from '../shared/colorgrid.js';
+import { SEAL_LEN, bytesPerFrame, encodeGrid, sealFrame } from '../shared/colorgrid.js';
 
 const MARGIN = 4;
 const LOOKAHEAD = 3;
@@ -189,7 +189,7 @@ function startColorStream(gen, payload) {
   const displayPx = Number(cfgSize.value);
   const gridSize = cfgGrid ? Number(cfgGrid.value) : COLOR_GRID_SIZE;
   const colorFrameBytes = bytesPerFrame(gridSize);
-  const blockLen = colorFrameBytes - HEADER_LEN;
+  const blockLen = colorFrameBytes - HEADER_LEN - SEAL_LEN;
 
   const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
   const encoder = new LTEncoder(payload, blockLen, sessionId);
@@ -231,7 +231,7 @@ function startColorStream(gen, payload) {
   let nextSeq = 0;
 
   const makeFrame = () => {
-    const frameData = packFrame({ ...header, seq: nextSeq }, encoder.encode(nextSeq));
+    const frameData = sealFrame(packFrame({ ...header, seq: nextSeq }, encoder.encode(nextSeq)));
     nextSeq++;
     const grid = encodeGrid(gridSize, frameData);
     const img = new ImageData(total, total);

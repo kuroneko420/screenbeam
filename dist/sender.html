@@ -2434,13 +2434,25 @@
   };
 
   // src/shared/colorgrid.js
-  var FINDER_SIZE = 5;
+  var FINDER_SIZE = 7;
+  var QUIET = 1;
+  var SEAL_LEN = 4;
   var FINDER_PATTERN = [
-    [1, 1, 1, 1, 1],
-    [1, 0, 0, 0, 1],
-    [1, 0, 2, 0, 1],
-    [1, 0, 0, 0, 1],
-    [1, 1, 1, 1, 1]
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 1, 1, 1, 1, 1, 0],
+    [0, 1, 0, 0, 0, 1, 0],
+    [0, 1, 0, 0, 0, 1, 0],
+    [0, 1, 0, 0, 0, 1, 0],
+    [0, 1, 1, 1, 1, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0]
+  ];
+  var ALIGN_SIZE = 5;
+  var ALIGN_PATTERN = [
+    [0, 0, 0, 0, 0],
+    [0, 1, 1, 1, 0],
+    [0, 1, 0, 1, 0],
+    [0, 1, 1, 1, 0],
+    [0, 0, 0, 0, 0]
   ];
   function getFinderPositions(gridSize) {
     return [
@@ -2449,12 +2461,19 @@
       [0, gridSize - FINDER_SIZE]
     ];
   }
-  function isFinderCell(x, y, gridSize) {
-    const finders = getFinderPositions(gridSize);
-    for (const [fx, fy] of finders) {
-      if (x >= fx && x < fx + FINDER_SIZE && y >= fy && y < fy + FINDER_SIZE) {
+  function getAlignPosition(gridSize) {
+    const start = gridSize - (FINDER_SIZE + ALIGN_SIZE) / 2;
+    return [start, start];
+  }
+  function isReservedCell(x, y, gridSize) {
+    for (const [fx, fy] of getFinderPositions(gridSize)) {
+      if (x >= fx - QUIET && x < fx + FINDER_SIZE + QUIET && y >= fy - QUIET && y < fy + FINDER_SIZE + QUIET) {
         return true;
       }
+    }
+    const [ax, ay] = getAlignPosition(gridSize);
+    if (x >= ax - QUIET && x < ax + ALIGN_SIZE + QUIET && y >= ay - QUIET && y < ay + ALIGN_SIZE + QUIET) {
+      return true;
     }
     return false;
   }
@@ -2462,7 +2481,7 @@
     const cells = [];
     for (let y = 0; y < gridSize; y++) {
       for (let x = 0; x < gridSize; x++) {
-        if (!isFinderCell(x, y, gridSize)) {
+        if (!isReservedCell(x, y, gridSize)) {
           cells.push([x, y]);
         }
       }
@@ -2470,19 +2489,40 @@
     return cells;
   }
   function dataCellCount(gridSize) {
-    return gridSize * gridSize - 3 * FINDER_SIZE * FINDER_SIZE;
+    const finderBlock = FINDER_SIZE + QUIET;
+    const alignBlock = ALIGN_SIZE + 2 * QUIET;
+    return gridSize * gridSize - 3 * finderBlock * finderBlock - alignBlock * alignBlock;
   }
   function bytesPerFrame(gridSize) {
     return Math.floor(dataCellCount(gridSize) * 2 / 8);
   }
+  function sealFrame(frame) {
+    const out = new Uint8Array(frame.length + SEAL_LEN);
+    out.set(frame, 0);
+    new DataView(out.buffer).setUint32(frame.length, fnv1a(frame), true);
+    return out;
+  }
   function encodeGrid(gridSize, data) {
     const grid = Array.from({ length: gridSize }, () => new Uint8Array(gridSize));
-    const finders = getFinderPositions(gridSize);
-    for (const [fx, fy] of finders) {
-      for (let dy = 0; dy < FINDER_SIZE; dy++) {
-        for (let dx = 0; dx < FINDER_SIZE; dx++) {
-          grid[fy + dy][fx + dx] = FINDER_PATTERN[dy][dx];
+    for (const [fx, fy] of getFinderPositions(gridSize)) {
+      for (let dy = -QUIET; dy < FINDER_SIZE + QUIET; dy++) {
+        for (let dx = -QUIET; dx < FINDER_SIZE + QUIET; dx++) {
+          const x = fx + dx;
+          const y = fy + dy;
+          if (x < 0 || y < 0 || x >= gridSize || y >= gridSize) continue;
+          const inPattern = dx >= 0 && dx < FINDER_SIZE && dy >= 0 && dy < FINDER_SIZE;
+          grid[y][x] = inPattern ? FINDER_PATTERN[dy][dx] : 1;
         }
+      }
+    }
+    const [ax, ay] = getAlignPosition(gridSize);
+    for (let dy = -QUIET; dy < ALIGN_SIZE + QUIET; dy++) {
+      for (let dx = -QUIET; dx < ALIGN_SIZE + QUIET; dx++) {
+        const x = ax + dx;
+        const y = ay + dy;
+        if (x < 0 || y < 0 || x >= gridSize || y >= gridSize) continue;
+        const inPattern = dx >= 0 && dx < ALIGN_SIZE && dy >= 0 && dy < ALIGN_SIZE;
+        grid[y][x] = inPattern ? ALIGN_PATTERN[dy][dx] : 1;
       }
     }
     const cells = getDataCells(gridSize);
@@ -2493,18 +2533,18 @@
       if (bitIdx + 1 < totalBits) {
         const bytePos = bitIdx >> 3;
         const bitOff = bitIdx & 7;
-        let val2;
+        let val;
         if (bitOff <= 6) {
-          val2 = data[bytePos] >> 6 - bitOff & 3;
+          val = data[bytePos] >> 6 - bitOff & 3;
         } else {
-          val2 = (data[bytePos] & 1) << 1 | data[bytePos + 1] >> 7 & 1;
+          val = (data[bytePos] & 1) << 1 | data[bytePos + 1] >> 7 & 1;
         }
-        grid[y][x] = val2;
+        grid[y][x] = val;
         bitIdx += 2;
       } else if (bitIdx < totalBits) {
         const bytePos = bitIdx >> 3;
         const bitOff = bitIdx & 7;
-        val = (data[bytePos] >> 7 - bitOff & 1) << 1;
+        const val = (data[bytePos] >> 7 - bitOff & 1) << 1;
         grid[y][x] = val;
         bitIdx += 2;
       } else {
@@ -2684,7 +2724,7 @@
     const displayPx = Number(cfgSize.value);
     const gridSize = cfgGrid ? Number(cfgGrid.value) : COLOR_GRID_SIZE;
     const colorFrameBytes = bytesPerFrame(gridSize);
-    const blockLen = colorFrameBytes - HEADER_LEN;
+    const blockLen = colorFrameBytes - HEADER_LEN - SEAL_LEN;
     const sessionId = Math.floor(Math.random() * 65535) + 1 & 65535;
     const encoder = new LTEncoder(payload, blockLen, sessionId);
     const header = {
@@ -2716,7 +2756,7 @@
     const queue = [];
     let nextSeq = 0;
     const makeFrame = () => {
-      const frameData = packFrame({ ...header, seq: nextSeq }, encoder.encode(nextSeq));
+      const frameData = sealFrame(packFrame({ ...header, seq: nextSeq }, encoder.encode(nextSeq)));
       nextSeq++;
       const grid = encodeGrid(gridSize, frameData);
       const img = new ImageData(total, total);

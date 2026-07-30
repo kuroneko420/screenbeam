@@ -1,7 +1,7 @@
 import jsQR from 'jsqr';
 import { LTDecoder } from '../shared/fountain.js';
 import { fnv1a, parseFrame } from '../shared/protocol.js';
-import { detectFinders, sampleGrid, decodeGrid } from '../shared/colorgrid.js';
+import { detectFinders, estimateGridSize, sampleGrid, decodeGrid, unsealFrame } from '../shared/colorgrid.js';
 
 const OVERHEAD_EST = 1.18;
 
@@ -134,36 +134,22 @@ function scheduleFrame(gen) {
 
 const grab = document.createElement('canvas');
 
-const COLOR_GRID_SIZES = [64, 48, 32];
+// Must match the sender's grid size options
+const COLOR_GRID_SIZES = [48, 64, 80, 96];
 
 function tryColorDecode(imageData, w, h) {
   const finders = detectFinders(imageData, w, h);
   if (!finders) return null;
 
-  // Estimate grid size from finder spacing
-  const dx = finders[1].x - finders[0].x;
-  const dy = finders[2].y - finders[0].y;
-  const avgSpan = (Math.abs(dx) + Math.abs(dy)) / 2;
+  const gridSize = estimateGridSize(finders, COLOR_GRID_SIZES);
+  if (!gridSize) return null;
 
-  let bestGrid = null;
-  let bestSize = 0;
-  for (const gs of COLOR_GRID_SIZES) {
-    const cellPx = avgSpan / (gs - 5);
-    if (cellPx >= 3 && cellPx <= 40) {
-      bestSize = gs;
-      break;
-    }
-  }
-  if (!bestSize) return null;
-
-  const grid = sampleGrid(imageData, w, h, finders, bestSize);
+  const grid = sampleGrid(imageData, w, h, finders, gridSize);
   if (!grid) return null;
 
-  const frameBytes = decodeGrid(bestSize, grid);
-  const parsed = parseFrame(frameBytes);
-  if (!parsed) return null;
-
-  return new Uint8Array(frameBytes.buffer, 0, parsed.header.blockLen + 20);
+  // unsealFrame verifies the checksum: a single misread cell anywhere in
+  // the frame rejects it here instead of corrupting the fountain decoder
+  return unsealFrame(decodeGrid(gridSize, grid));
 }
 
 function captureFrame() {
