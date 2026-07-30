@@ -168,6 +168,13 @@
     <summary>Settings</summary>
     <div class="row">
       <label>
+        mode
+        <select id="cfg-decmode">
+          <option value="qr" selected>QR (B&amp;W)</option>
+          <option value="color">4-color grid</option>
+        </select>
+      </label>
+      <label>
         capture width
         <select id="cfg-width">
           <option>960</option>
@@ -196,6 +203,7 @@
     <div class="metric"><div class="k">blocks</div><div class="v" id="m-k">&ndash;</div></div>
     <div class="metric"><div class="k">block len</div><div class="v" id="m-block">&ndash;</div></div>
     <div class="metric"><div class="k">payload</div><div class="v" id="m-payload">&ndash;</div></div>
+    <div class="metric"><div class="k">find/size/val/ok</div><div class="v" id="m-stages">&ndash;</div></div>
   </div>
 
   <div id="preview" style="display:none">
@@ -11011,6 +11019,7 @@
   var metricsEl = document.getElementById("metrics");
   var metric = (id) => document.getElementById(id);
   var stream = null;
+  var decodeMode = "qr";
   var decoder = null;
   var sessionId = 0;
   var startTs = 0;
@@ -11054,6 +11063,7 @@
     }
     const captureWidth = Number(document.getElementById("cfg-width").value);
     const captureFps = Number(document.getElementById("cfg-capfps").value);
+    decodeMode = document.getElementById("cfg-decmode").value;
     settings.style.display = "none";
     startBtn.style.display = "none";
     preview.style.display = "block";
@@ -11109,14 +11119,20 @@
   }
   var grab = document.createElement("canvas");
   var COLOR_GRID_SIZES = [48, 64, 80, 96];
+  var colorStages = { find: 0, size: 0, valid: 0, ok: 0 };
   function tryColorDecode(imageData, w, h) {
     const finders = detectFinders(imageData, w, h);
     if (!finders) return null;
+    colorStages.find++;
     const gridSize = estimateGridSize(finders, COLOR_GRID_SIZES);
     if (!gridSize) return null;
+    colorStages.size++;
     const grid = sampleGrid(imageData, w, h, finders, gridSize);
     if (!grid) return null;
-    return unsealFrame(decodeGrid(gridSize, grid));
+    colorStages.valid++;
+    const frame = unsealFrame(decodeGrid(gridSize, grid));
+    if (frame) colorStages.ok++;
+    return frame;
   }
   function captureFrame() {
     const vw = video.videoWidth;
@@ -11136,10 +11152,10 @@
       return;
     }
     decoding = true;
-    const colorResult = tryColorDecode(img.data, vw, vh);
-    if (colorResult) {
+    if (decodeMode === "color") {
+      const colorResult = tryColorDecode(img.data, vw, vh);
       decoding = false;
-      onDecoded(colorResult);
+      if (colorResult) onDecoded(colorResult);
       return;
     }
     const qr = (0, import_jsqr.default)(img.data, vw, vh, { inversionAttempts: "dontInvert" });
@@ -11220,6 +11236,7 @@
     prune(decodeTimes);
     metric("m-cap").textContent = (captureTimes.length / 2).toFixed(0);
     metric("m-dec").textContent = (decodeTimes.length / 2).toFixed(1);
+    metric("m-stages").textContent = decodeMode === "color" ? colorStages.find + "/" + colorStages.size + "/" + colorStages.valid + "/" + colorStages.ok : "qr";
     if (!decoder) return;
     const elapsed = (now - startTs) / 1e3;
     const kbs = decoder.framesNew * decoder.blockLen / OVERHEAD_EST / 1024 / Math.max(0.1, elapsed);

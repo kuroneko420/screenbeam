@@ -168,6 +168,13 @@
     <summary>Settings</summary>
     <div class="row">
       <label>
+        mode
+        <select id="cfg-decmode">
+          <option value="qr" selected>QR (B&amp;W)</option>
+          <option value="color">4-color grid</option>
+        </select>
+      </label>
+      <label>
         capture width
         <select id="cfg-width">
           <option>960</option>
@@ -196,6 +203,7 @@
     <div class="metric"><div class="k">blocks</div><div class="v" id="m-k">&ndash;</div></div>
     <div class="metric"><div class="k">block len</div><div class="v" id="m-block">&ndash;</div></div>
     <div class="metric"><div class="k">payload</div><div class="v" id="m-payload">&ndash;</div></div>
+    <div class="metric"><div class="k">find/size/val/ok</div><div class="v" id="m-stages">&ndash;</div></div>
   </div>
 
   <div id="preview" style="display:none">

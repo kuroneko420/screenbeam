@@ -17,6 +17,7 @@ const metricsEl = document.getElementById('metrics');
 const metric = (id) => document.getElementById(id);
 
 let stream = null;
+let decodeMode = 'qr';
 let decoder = null;
 let sessionId = 0;
 let startTs = 0;
@@ -73,6 +74,7 @@ async function start() {
 
   const captureWidth = Number(document.getElementById('cfg-width').value);
   const captureFps = Number(document.getElementById('cfg-capfps').value);
+  decodeMode = document.getElementById('cfg-decmode').value;
 
   settings.style.display = 'none';
   startBtn.style.display = 'none';
@@ -137,19 +139,28 @@ const grab = document.createElement('canvas');
 // Must match the sender's grid size options
 const COLOR_GRID_SIZES = [48, 64, 80, 96];
 
+// Cumulative counts of how far color frames get through the pipeline:
+// finders detected, grid size resolved, sampling validated, checksum ok
+const colorStages = { find: 0, size: 0, valid: 0, ok: 0 };
+
 function tryColorDecode(imageData, w, h) {
   const finders = detectFinders(imageData, w, h);
   if (!finders) return null;
+  colorStages.find++;
 
   const gridSize = estimateGridSize(finders, COLOR_GRID_SIZES);
   if (!gridSize) return null;
+  colorStages.size++;
 
   const grid = sampleGrid(imageData, w, h, finders, gridSize);
   if (!grid) return null;
+  colorStages.valid++;
 
   // unsealFrame verifies the checksum: a single misread cell anywhere in
   // the frame rejects it here instead of corrupting the fountain decoder
-  return unsealFrame(decodeGrid(gridSize, grid));
+  const frame = unsealFrame(decodeGrid(gridSize, grid));
+  if (frame) colorStages.ok++;
+  return frame;
 }
 
 function captureFrame() {
@@ -174,15 +185,16 @@ function captureFrame() {
 
   decoding = true;
 
-  // Try color grid first (faster than jsQR if finders are present)
-  const colorResult = tryColorDecode(img.data, vw, vh);
-  if (colorResult) {
+  // The two decoders are never stacked on one frame: color detection is
+  // expensive and a QR code's own corner markers match its signature, so
+  // running both would starve jsQR on phones
+  if (decodeMode === 'color') {
+    const colorResult = tryColorDecode(img.data, vw, vh);
     decoding = false;
-    onDecoded(colorResult);
+    if (colorResult) onDecoded(colorResult);
     return;
   }
 
-  // Fall back to QR
   const qr = jsQR(img.data, vw, vh, { inversionAttempts: 'dontInvert' });
   decoding = false;
 
@@ -276,6 +288,9 @@ function updateStats() {
   prune(decodeTimes);
   metric('m-cap').textContent = (captureTimes.length / 2).toFixed(0);
   metric('m-dec').textContent = (decodeTimes.length / 2).toFixed(1);
+  metric('m-stages').textContent = decodeMode === 'color'
+    ? colorStages.find + '/' + colorStages.size + '/' + colorStages.valid + '/' + colorStages.ok
+    : 'qr';
   if (!decoder) return;
   const elapsed = (now - startTs) / 1000;
   const kbs = (decoder.framesNew * decoder.blockLen) / OVERHEAD_EST / 1024 / Math.max(0.1, elapsed);
