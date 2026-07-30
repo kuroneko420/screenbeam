@@ -72,7 +72,7 @@ htmlFile.Close
 
 Dim injection
 injection = "<script>window.__SCREENBEAM__={data:""" & b64 & """,filename:""" & fileName & """};</script>"
-html = Replace(html, "</body>", injection & vbCrLf & "</body>")
+html = Replace(html, "<script>", injection & vbCrLf & "<script>", 1, 1)
 
 Dim tempPath
 tempPath = fso.BuildPath(fso.GetSpecialFolder(2), "screenbeam-send.html")
