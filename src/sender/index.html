@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>screenbeam / send</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px 16px;
+    }
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 300;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: #4fc3f7;
+      margin-bottom: 4px;
+    }
+    .sub { font-size: 0.75rem; color: #555; margin-bottom: 16px; }
+    #file-info {
+      color: #aaa;
+      font-size: 0.85rem;
+      margin-bottom: 12px;
+      font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    }
+    #drop-zone {
+      width: min(420px, 88vw);
+      height: 180px;
+      border: 2px dashed #333;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      color: #777;
+      font-size: 0.95rem;
+    }
+    #drop-zone:hover, #drop-zone.dragover {
+      border-color: #4fc3f7;
+      background: rgba(79, 195, 247, 0.04);
+    }
+    .drop-icon { font-size: 2rem; color: #444; line-height: 1; }
+    #stage {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+    }
+    #specs {
+      color: #777;
+      font-size: 0.72rem;
+      font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+      text-align: center;
+      max-width: 90vw;
+      word-break: break-word;
+    }
+    canvas { image-rendering: pixelated; border-radius: 4px; }
+    .settings {
+      color: #777;
+      font-size: 0.85rem;
+      width: min(480px, 90vw);
+    }
+    .settings summary { cursor: pointer; padding: 8px; text-align: center; }
+    .settings .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 10px 0;
+      justify-content: center;
+    }
+    .settings label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 0.72rem;
+      color: #555;
+    }
+    .settings select, .settings input[type=range] {
+      background: #151515;
+      color: #ddd;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 0.82rem;
+    }
+    .hint {
+      color: #444;
+      font-size: 0.78rem;
+      text-align: center;
+      max-width: 380px;
+      margin-top: 8px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <h1>screenbeam</h1>
+  <div class="sub">optical file transfer</div>
+
+  <div id="file-info" style="display:none"></div>
+
+  <input type="file" id="file-input" hidden>
+  <div id="drop-zone">
+    <div class="drop-icon">+</div>
+    <div>Drop a file or tap to browse</div>
+  </div>
+
+  <div id="stage" style="display:none">
+    <div id="specs">preparing...</div>
+    <canvas id="qr" width="16" height="16"></canvas>
+    <details class="settings">
+      <summary>Settings</summary>
+      <div class="row">
+        <label>
+          tx fps
+          <select id="cfg-fps">
+            <option>10</option>
+            <option>15</option>
+            <option>20</option>
+            <option selected>24</option>
+            <option>30</option>
+          </select>
+        </label>
+        <label>
+          bytes / frame
+          <select id="cfg-bytes">
+            <option>500</option>
+            <option>1000</option>
+            <option selected>1465</option>
+            <option>1850</option>
+            <option>2331</option>
+            <option>2953</option>
+          </select>
+        </label>
+        <label>
+          error correction
+          <select id="cfg-ecc">
+            <option selected>L</option>
+            <option>M</option>
+            <option>Q</option>
+            <option>H</option>
+          </select>
+        </label>
+        <label>
+          display size
+          <input id="cfg-size" type="range" min="300" max="1200" step="50" value="900">
+        </label>
+      </div>
+    </details>
+    <div class="hint">
+      Max screen brightness helps. The stream loops forever;
+      stop when the receiver says done.
+    </div>
+  </div>
+
+  <!-- BUNDLE -->
+</body>
+</html>

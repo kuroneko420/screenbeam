@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+  <title>screenbeam / receive</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px 16px;
+      padding-bottom: env(safe-area-inset-bottom, 20px);
+    }
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 300;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: #4fc3f7;
+      margin-bottom: 4px;
+    }
+    .sub { font-size: 0.75rem; color: #555; margin-bottom: 16px; }
+    #stats {
+      color: #888;
+      font-size: 0.82rem;
+      text-align: center;
+      margin-bottom: 12px;
+      max-width: 90vw;
+      word-break: break-word;
+      font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    }
+    #start {
+      background: #4fc3f7;
+      color: #0a0a0a;
+      border: none;
+      border-radius: 8px;
+      padding: 14px 36px;
+      font-size: 1.05rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin: 12px 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #start:active { opacity: 0.85; }
+    .settings {
+      color: #777;
+      font-size: 0.85rem;
+      width: min(400px, 90vw);
+      margin-bottom: 8px;
+    }
+    .settings summary { cursor: pointer; padding: 8px; text-align: center; }
+    .settings .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 10px 0;
+      justify-content: center;
+    }
+    .settings label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 0.72rem;
+      color: #555;
+    }
+    .settings select {
+      background: #151515;
+      color: #ddd;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 0.82rem;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      width: min(440px, 92vw);
+      margin: 10px 0;
+    }
+    .metric {
+      background: #141414;
+      border-radius: 6px;
+      padding: 7px 4px;
+      text-align: center;
+    }
+    .metric .k {
+      font-size: 0.6rem;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .metric .v {
+      font-size: 0.88rem;
+      font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+      color: #4fc3f7;
+      margin-top: 2px;
+    }
+    #preview video {
+      width: min(380px, 88vw);
+      border-radius: 8px;
+      display: block;
+      margin: 0 auto;
+    }
+    .progress {
+      width: min(380px, 88vw);
+      height: 5px;
+      background: #1a1a1a;
+      border-radius: 3px;
+      overflow: hidden;
+      margin: 10px 0;
+    }
+    .progress > div {
+      height: 100%;
+      background: #4fc3f7;
+      border-radius: 3px;
+      transition: width 0.3s;
+      width: 0%;
+    }
+    #result { text-align: center; }
+    .done {
+      color: #66bb6a;
+      font-size: 1.3rem;
+      font-weight: 600;
+      margin: 14px 0 6px;
+    }
+    .file-info {
+      color: #aaa;
+      font-size: 0.85rem;
+      font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+      margin: 4px 0;
+    }
+    .download-btn {
+      display: inline-block;
+      background: #66bb6a;
+      color: #0a0a0a;
+      text-decoration: none;
+      border-radius: 8px;
+      padding: 12px 28px;
+      font-weight: 600;
+      font-size: 1rem;
+      margin: 14px 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .download-btn:active { opacity: 0.85; }
+    .received {
+      max-width: min(280px, 80vw);
+      border-radius: 8px;
+      margin: 10px auto;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <h1>screenbeam</h1>
+  <div class="sub">receiver</div>
+
+  <div id="stats">point the camera at the sender's screen</div>
+
+  <details class="settings" id="settings">
+    <summary>Settings</summary>
+    <div class="row">
+      <label>
+        capture width
+        <select id="cfg-width">
+          <option>960</option>
+          <option selected>1280</option>
+          <option>1920</option>
+        </select>
+      </label>
+      <label>
+        capture fps
+        <select id="cfg-capfps">
+          <option>30</option>
+          <option selected>60</option>
+        </select>
+      </label>
+    </div>
+  </details>
+
+  <button id="start">Start Camera</button>
+
+  <div class="metrics" id="metrics" style="display:none">
+    <div class="metric"><div class="k">capture</div><div class="v" id="m-cap">&ndash;</div></div>
+    <div class="metric"><div class="k">decode</div><div class="v" id="m-dec">&ndash;</div></div>
+    <div class="metric"><div class="k">goodput</div><div class="v" id="m-rate">&ndash;</div></div>
+    <div class="metric"><div class="k">elapsed</div><div class="v" id="m-time">&ndash;</div></div>
+    <div class="metric"><div class="k">new/dup</div><div class="v" id="m-frames">&ndash;</div></div>
+    <div class="metric"><div class="k">blocks</div><div class="v" id="m-k">&ndash;</div></div>
+    <div class="metric"><div class="k">block len</div><div class="v" id="m-block">&ndash;</div></div>
+    <div class="metric"><div class="k">payload</div><div class="v" id="m-payload">&ndash;</div></div>
+  </div>
+
+  <div id="preview" style="display:none">
+    <video id="video" muted playsinline></video>
+  </div>
+
+  <div class="progress" id="progress" style="display:none"><div id="bar"></div></div>
+
+  <div id="result"></div>
+
+  <!-- BUNDLE -->
+</body>
+</html>

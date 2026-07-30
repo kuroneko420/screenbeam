@@ -1,0 +1,17 @@
+{
+  "name": "screenbeam",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "File transfer between devices using fountain-coded QR codes. Screen to camera, no network.",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "jsqr": "^1.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
