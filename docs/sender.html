@@ -124,6 +124,22 @@
       <summary>Settings</summary>
       <div class="row">
         <label>
+          mode
+          <select id="cfg-mode">
+            <option value="qr" selected>QR (B&W)</option>
+            <option value="color">4-color grid</option>
+          </select>
+        </label>
+        <label>
+          grid size
+          <select id="cfg-grid">
+            <option>48</option>
+            <option selected>64</option>
+            <option>80</option>
+            <option>96</option>
+          </select>
+        </label>
+        <label>
           tx fps
           <select id="cfg-fps">
             <option>10</option>
@@ -2417,9 +2433,91 @@
     }
   };
 
+  // src/shared/colorgrid.js
+  var FINDER_SIZE = 5;
+  var FINDER_PATTERN = [
+    [1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 1],
+    [1, 0, 2, 0, 1],
+    [1, 0, 0, 0, 1],
+    [1, 1, 1, 1, 1]
+  ];
+  function getFinderPositions(gridSize) {
+    return [
+      [0, 0],
+      [gridSize - FINDER_SIZE, 0],
+      [0, gridSize - FINDER_SIZE]
+    ];
+  }
+  function isFinderCell(x, y, gridSize) {
+    const finders = getFinderPositions(gridSize);
+    for (const [fx, fy] of finders) {
+      if (x >= fx && x < fx + FINDER_SIZE && y >= fy && y < fy + FINDER_SIZE) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function getDataCells(gridSize) {
+    const cells = [];
+    for (let y = 0; y < gridSize; y++) {
+      for (let x = 0; x < gridSize; x++) {
+        if (!isFinderCell(x, y, gridSize)) {
+          cells.push([x, y]);
+        }
+      }
+    }
+    return cells;
+  }
+  function dataCellCount(gridSize) {
+    return gridSize * gridSize - 3 * FINDER_SIZE * FINDER_SIZE;
+  }
+  function bytesPerFrame(gridSize) {
+    return Math.floor(dataCellCount(gridSize) * 2 / 8);
+  }
+  function encodeGrid(gridSize, data) {
+    const grid = Array.from({ length: gridSize }, () => new Uint8Array(gridSize));
+    const finders = getFinderPositions(gridSize);
+    for (const [fx, fy] of finders) {
+      for (let dy = 0; dy < FINDER_SIZE; dy++) {
+        for (let dx = 0; dx < FINDER_SIZE; dx++) {
+          grid[fy + dy][fx + dx] = FINDER_PATTERN[dy][dx];
+        }
+      }
+    }
+    const cells = getDataCells(gridSize);
+    let bitIdx = 0;
+    const totalBits = data.length * 8;
+    for (let i = 0; i < cells.length; i++) {
+      const [x, y] = cells[i];
+      if (bitIdx + 1 < totalBits) {
+        const bytePos = bitIdx >> 3;
+        const bitOff = bitIdx & 7;
+        let val2;
+        if (bitOff <= 6) {
+          val2 = data[bytePos] >> 6 - bitOff & 3;
+        } else {
+          val2 = (data[bytePos] & 1) << 1 | data[bytePos + 1] >> 7 & 1;
+        }
+        grid[y][x] = val2;
+        bitIdx += 2;
+      } else if (bitIdx < totalBits) {
+        const bytePos = bitIdx >> 3;
+        const bitOff = bitIdx & 7;
+        val = (data[bytePos] >> 7 - bitOff & 1) << 1;
+        grid[y][x] = val;
+        bitIdx += 2;
+      } else {
+        grid[y][x] = 0;
+      }
+    }
+    return grid;
+  }
+
   // src/sender/main.js
   var MARGIN = 4;
   var LOOKAHEAD = 3;
+  var COLOR_GRID_SIZE = 64;
   var dropZone = document.getElementById("drop-zone");
   var fileInput = document.getElementById("file-input");
   var fileInfo = document.getElementById("file-info");
@@ -2430,6 +2528,8 @@
   var cfgBytes = document.getElementById("cfg-bytes");
   var cfgEcc = document.getElementById("cfg-ecc");
   var cfgSize = document.getElementById("cfg-size");
+  var cfgMode = document.getElementById("cfg-mode");
+  var cfgGrid = document.getElementById("cfg-grid");
   var generation = 0;
   var currentPayload = null;
   function formatSize(n) {
@@ -2469,8 +2569,8 @@
     fileInfo.style.display = "block";
     startStream();
   }
-  for (const el of [cfgFps, cfgBytes, cfgEcc, cfgSize]) {
-    el.addEventListener("change", () => {
+  for (const el of [cfgFps, cfgBytes, cfgEcc, cfgSize, cfgMode, cfgGrid]) {
+    if (el) el.addEventListener("change", () => {
       if (currentPayload) startStream();
     });
   }
@@ -2478,6 +2578,14 @@
     const gen = ++generation;
     const payload = currentPayload;
     if (!payload) return;
+    const mode = cfgMode ? cfgMode.value : "qr";
+    if (mode === "color") {
+      startColorStream(gen, payload);
+    } else {
+      startQRStream(gen, payload);
+    }
+  }
+  function startQRStream(gen, payload) {
     const txFps = Number(cfgFps.value);
     const frameBytes = Number(cfgBytes.value);
     const ecc = cfgEcc.value;
@@ -2548,6 +2656,82 @@
         specs.textContent = "Error: " + (err instanceof Error ? err.message : String(err));
         return;
       }
+      setTimeout(pump, 0);
+    };
+    pump();
+    const interval = 1e3 / txFps;
+    let nextAt = performance.now();
+    const tick = (now) => {
+      if (gen !== generation) return;
+      requestAnimationFrame(tick);
+      if (now < nextAt) return;
+      const img = queue.shift();
+      if (!img) {
+        nextAt = now + interval;
+        return;
+      }
+      staging.getContext("2d").putImageData(img, 0, 0);
+      const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(staging, 0, 0, canvas.width, canvas.height);
+      nextAt += interval;
+      if (now - nextAt > 3 * interval) nextAt = now + interval;
+    };
+    requestAnimationFrame(tick);
+  }
+  function startColorStream(gen, payload) {
+    const txFps = Number(cfgFps.value);
+    const displayPx = Number(cfgSize.value);
+    const gridSize = cfgGrid ? Number(cfgGrid.value) : COLOR_GRID_SIZE;
+    const colorFrameBytes = bytesPerFrame(gridSize);
+    const blockLen = colorFrameBytes - HEADER_LEN;
+    const sessionId = Math.floor(Math.random() * 65535) + 1 & 65535;
+    const encoder = new LTEncoder(payload, blockLen, sessionId);
+    const header = {
+      sessionId,
+      seq: 0,
+      k: encoder.k,
+      blockLen,
+      totalLen: payload.length,
+      payloadFnv: fnv1a(payload)
+    };
+    specs.textContent = txFps + " FPS | 4-color " + gridSize + "x" + gridSize + " | " + colorFrameBytes + " B/frame | " + formatSize(payload.length) + " payload | K=" + encoder.k;
+    const total = gridSize + 2 * MARGIN;
+    const staging = document.createElement("canvas");
+    staging.width = total;
+    staging.height = total;
+    const dpr = window.devicePixelRatio || 1;
+    const cssBudget = Math.min(0.9 * Math.min(window.innerWidth, window.innerHeight), displayPx);
+    const scale = Math.max(1, Math.floor(cssBudget * dpr / total));
+    canvas.width = total * scale;
+    canvas.height = total * scale;
+    canvas.style.width = total * scale / dpr + "px";
+    canvas.style.height = total * scale / dpr + "px";
+    const RGBA = [
+      4278190080,
+      4294967295,
+      4278190335,
+      4294967040
+    ];
+    const queue = [];
+    let nextSeq = 0;
+    const makeFrame = () => {
+      const frameData = packFrame({ ...header, seq: nextSeq }, encoder.encode(nextSeq));
+      nextSeq++;
+      const grid = encodeGrid(gridSize, frameData);
+      const img = new ImageData(total, total);
+      const px = new Uint32Array(img.data.buffer);
+      px.fill(4287137928);
+      for (let y = 0; y < gridSize; y++) {
+        for (let x = 0; x < gridSize; x++) {
+          px[(y + MARGIN) * total + (x + MARGIN)] = RGBA[grid[y][x]];
+        }
+      }
+      return img;
+    };
+    const pump = () => {
+      if (gen !== generation) return;
+      while (queue.length < LOOKAHEAD) queue.push(makeFrame());
       setTimeout(pump, 0);
     };
     pump();

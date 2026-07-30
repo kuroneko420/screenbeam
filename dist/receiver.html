@@ -10463,6 +10463,209 @@
     }
   };
 
+  // src/shared/colorgrid.js
+  var COLORS = [
+    [0, 0, 0],
+    [255, 255, 255],
+    [255, 0, 0],
+    [0, 255, 255]
+  ];
+  var FINDER_SIZE = 5;
+  function getFinderPositions(gridSize) {
+    return [
+      [0, 0],
+      [gridSize - FINDER_SIZE, 0],
+      [0, gridSize - FINDER_SIZE]
+    ];
+  }
+  function isFinderCell(x, y, gridSize) {
+    const finders = getFinderPositions(gridSize);
+    for (const [fx, fy] of finders) {
+      if (x >= fx && x < fx + FINDER_SIZE && y >= fy && y < fy + FINDER_SIZE) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function getDataCells(gridSize) {
+    const cells = [];
+    for (let y = 0; y < gridSize; y++) {
+      for (let x = 0; x < gridSize; x++) {
+        if (!isFinderCell(x, y, gridSize)) {
+          cells.push([x, y]);
+        }
+      }
+    }
+    return cells;
+  }
+  function dataCellCount(gridSize) {
+    return gridSize * gridSize - 3 * FINDER_SIZE * FINDER_SIZE;
+  }
+  function bytesPerFrame(gridSize) {
+    return Math.floor(dataCellCount(gridSize) * 2 / 8);
+  }
+  function decodeGrid(gridSize, grid) {
+    const cells = getDataCells(gridSize);
+    const byteCount = bytesPerFrame(gridSize);
+    const out = new Uint8Array(byteCount);
+    let bitIdx = 0;
+    for (let i = 0; i < cells.length && bitIdx < byteCount * 8; i++) {
+      const [x, y] = cells[i];
+      const val2 = grid[y][x] & 3;
+      const bytePos = bitIdx >> 3;
+      const bitOff = bitIdx & 7;
+      if (bitOff <= 6) {
+        out[bytePos] |= val2 << 6 - bitOff;
+      } else {
+        out[bytePos] |= val2 >> 1 & 1;
+        if (bytePos + 1 < byteCount) {
+          out[bytePos + 1] |= (val2 & 1) << 7;
+        }
+      }
+      bitIdx += 2;
+    }
+    return out;
+  }
+  function classifyColor(r, g, b) {
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < 4; i++) {
+      const dr = r - COLORS[i][0];
+      const dg = g - COLORS[i][1];
+      const db = b - COLORS[i][2];
+      const d = dr * dr + dg * dg + db * db;
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+  function detectFinders(imageData, w, h) {
+    const lum = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) {
+      const j = i * 4;
+      lum[i] = imageData[j] * 77 + imageData[j + 1] * 150 + imageData[j + 2] * 29 >> 8;
+    }
+    const candidates = [];
+    const SCAN_STEP = Math.max(1, Math.min(w, h) / 200 | 0);
+    for (let y = 0; y < h; y += SCAN_STEP) {
+      let runStart = 0;
+      let runs = [];
+      let lastVal = lum[y * w] > 128 ? 1 : 0;
+      for (let x = 1; x < w; x++) {
+        const val2 = lum[y * w + x] > 128 ? 1 : 0;
+        if (val2 !== lastVal) {
+          runs.push({ start: runStart, len: x - runStart, val: lastVal });
+          runStart = x;
+          lastVal = val2;
+          if (runs.length > 5) runs.shift();
+          if (runs.length === 5 && runs[0].val === 1 && runs[1].val === 0 && runs[2].val === 1 && runs[3].val === 0 && runs[4].val === 1) {
+            const totalLen = runs[0].len + runs[1].len + runs[2].len + runs[3].len + runs[4].len;
+            const unit = totalLen / 5;
+            const r0 = runs[0].len / unit;
+            const r1 = runs[1].len / unit;
+            const r2 = runs[2].len / unit;
+            const r3 = runs[3].len / unit;
+            const r4 = runs[4].len / unit;
+            if (r0 > 0.5 && r0 < 1.5 && r1 > 2 && r1 < 4.5 && r2 > 0.5 && r2 < 1.5 && r3 > 2 && r3 < 4.5 && r4 > 0.5 && r4 < 1.5) {
+              const cx = runs[0].start + totalLen / 2;
+              candidates.push({ x: cx, y, size: totalLen });
+            }
+          }
+        }
+      }
+    }
+    if (candidates.length < 3) return null;
+    const clusters = [];
+    for (const c of candidates) {
+      let merged = false;
+      for (const cl of clusters) {
+        const dx = c.x - cl.x;
+        const dy = c.y - cl.y;
+        if (dx * dx + dy * dy < c.size * c.size) {
+          cl.x = (cl.x * cl.count + c.x) / (cl.count + 1);
+          cl.y = (cl.y * cl.count + c.y) / (cl.count + 1);
+          cl.size = (cl.size * cl.count + c.size) / (cl.count + 1);
+          cl.count++;
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) clusters.push({ ...c, count: 1 });
+    }
+    const sorted = clusters.filter((c) => c.count >= 2).sort((a, b) => b.count - a.count);
+    if (sorted.length < 3) return null;
+    const top3 = sorted.slice(0, 3);
+    let bestTL = null;
+    let bestScore = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const tl2 = top3[i];
+      const others2 = top3.filter((_, j) => j !== i);
+      const v1x = others2[0].x - tl2.x;
+      const v1y = others2[0].y - tl2.y;
+      const v2x = others2[1].x - tl2.x;
+      const v2y = others2[1].y - tl2.y;
+      const dot = Math.abs(v1x * v2x + v1y * v2y);
+      const mag = Math.sqrt(v1x * v1x + v1y * v1y) * Math.sqrt(v2x * v2x + v2y * v2y);
+      const cosAngle = mag > 0 ? dot / mag : 1;
+      if (cosAngle < bestScore) {
+        bestScore = cosAngle;
+        bestTL = i;
+      }
+    }
+    if (bestTL === null || bestScore > 0.4) return null;
+    const tl = top3[bestTL];
+    const others = top3.filter((_, j) => j !== bestTL);
+    let tr, bl;
+    if (others[0].x > others[1].x) {
+      tr = others[0];
+      bl = others[1];
+    } else {
+      tr = others[1];
+      bl = others[0];
+    }
+    const cross = (tr.x - tl.x) * (bl.y - tl.y) - (tr.y - tl.y) * (bl.x - tl.x);
+    if (cross < 0) {
+      [tr, bl] = [bl, tr];
+    }
+    return [
+      { x: tl.x, y: tl.y, size: tl.size },
+      { x: tr.x, y: tr.y, size: tr.size },
+      { x: bl.x, y: bl.y, size: bl.size }
+    ];
+  }
+  function sampleGrid(imageData, w, h, finders, gridSize) {
+    const [tl, tr, bl] = finders;
+    const gTL = FINDER_SIZE / 2;
+    const gTR = gridSize - FINDER_SIZE / 2;
+    const gBL = FINDER_SIZE / 2;
+    const gBR = gridSize - FINDER_SIZE / 2;
+    const dgx = gTR - gTL;
+    const axX = (tr.x - tl.x) / dgx;
+    const axY = (tr.y - tl.y) / dgx;
+    const ayX = (bl.x - tl.x) / (gBR - gTL);
+    const ayY = (bl.y - tl.y) / (gBR - gTL);
+    const ox = tl.x - axX * gTL - ayX * gTL;
+    const oy = tl.y - axY * gTL - ayY * gTL;
+    const grid = Array.from({ length: gridSize }, () => new Uint8Array(gridSize));
+    for (let gy = 0; gy < gridSize; gy++) {
+      for (let gx = 0; gx < gridSize; gx++) {
+        const cx = gx + 0.5;
+        const cy = gy + 0.5;
+        const ix = ox + axX * cx + ayX * cy | 0;
+        const iy = oy + axY * cx + ayY * cy | 0;
+        if (ix < 0 || ix >= w || iy < 0 || iy >= h) {
+          grid[gy][gx] = 0;
+          continue;
+        }
+        const idx = (iy * w + ix) * 4;
+        grid[gy][gx] = classifyColor(imageData[idx], imageData[idx + 1], imageData[idx + 2]);
+      }
+    }
+    return grid;
+  }
+
   // src/receiver/main.js
   var OVERHEAD_EST = 1.18;
   var startBtn = document.getElementById("start");
@@ -10573,6 +10776,30 @@
     }
   }
   var grab = document.createElement("canvas");
+  var COLOR_GRID_SIZES = [64, 48, 32];
+  function tryColorDecode(imageData, w, h) {
+    const finders = detectFinders(imageData, w, h);
+    if (!finders) return null;
+    const dx = finders[1].x - finders[0].x;
+    const dy = finders[2].y - finders[0].y;
+    const avgSpan = (Math.abs(dx) + Math.abs(dy)) / 2;
+    let bestGrid = null;
+    let bestSize = 0;
+    for (const gs of COLOR_GRID_SIZES) {
+      const cellPx = avgSpan / (gs - 5);
+      if (cellPx >= 3 && cellPx <= 40) {
+        bestSize = gs;
+        break;
+      }
+    }
+    if (!bestSize) return null;
+    const grid = sampleGrid(imageData, w, h, finders, bestSize);
+    if (!grid) return null;
+    const frameBytes = decodeGrid(bestSize, grid);
+    const parsed = parseFrame(frameBytes);
+    if (!parsed) return null;
+    return new Uint8Array(frameBytes.buffer, 0, parsed.header.blockLen + 20);
+  }
   function captureFrame() {
     const vw = video.videoWidth;
     const vh = video.videoHeight;
@@ -10591,6 +10818,12 @@
       return;
     }
     decoding = true;
+    const colorResult = tryColorDecode(img.data, vw, vh);
+    if (colorResult) {
+      decoding = false;
+      onDecoded(colorResult);
+      return;
+    }
     const qr = (0, import_jsqr.default)(img.data, vw, vh, { inversionAttempts: "dontInvert" });
     decoding = false;
     if (qr && qr.binaryData && qr.binaryData.length > 0) {
