@@ -25,6 +25,42 @@ let decoding = false;
 
 const captureTimes = [];
 const decodeTimes = [];
+let skippedFrames = 0;
+
+// Shakycam: detect and discard frames captured mid-screen-refresh.
+// Samples a sparse luminance grid and compares to the previous frame.
+// Stable frames (low diff) get decoded. Transitional frames get skipped.
+let prevLum = null;
+const SC_GRID = 20;
+const SC_THRESH = 12;
+
+function isFrameStable(data, w, h) {
+  const stepX = Math.max(1, (w / SC_GRID) | 0);
+  const stepY = Math.max(1, (h / SC_GRID) | 0);
+  const len = Math.ceil(h / stepY) * Math.ceil(w / stepX);
+  const lum = new Uint8Array(len);
+  let idx = 0;
+
+  for (let y = 0; y < h; y += stepY) {
+    const row = y * w;
+    for (let x = 0; x < w; x += stepX) {
+      const i = (row + x) * 4;
+      lum[idx++] = (data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29) >> 8;
+    }
+  }
+
+  if (!prevLum || prevLum.length !== idx) {
+    prevLum = lum.slice(0, idx);
+    return true;
+  }
+
+  let diff = 0;
+  for (let i = 0; i < idx; i++) diff += Math.abs(lum[i] - prevLum[i]);
+  diff /= idx;
+
+  for (let i = 0; i < idx; i++) prevLum[i] = lum[i];
+  return diff < SC_THRESH;
+}
 
 startBtn.onclick = () => start();
 
@@ -111,6 +147,11 @@ function captureFrame() {
   const ctx = grab.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(video, 0, 0);
   const img = ctx.getImageData(0, 0, vw, vh);
+
+  if (!isFrameStable(img.data, vw, vh)) {
+    skippedFrames++;
+    return;
+  }
 
   decoding = true;
   const qr = jsQR(img.data, vw, vh, { inversionAttempts: 'dontInvert' });
@@ -211,7 +252,7 @@ function updateStats() {
   const kbs = (decoder.framesNew * decoder.blockLen) / OVERHEAD_EST / 1024 / Math.max(0.1, elapsed);
   metric('m-rate').textContent = kbs.toFixed(1) + ' KB/s';
   metric('m-time').textContent = elapsed.toFixed(0) + 's';
-  metric('m-frames').textContent = decoder.framesNew + '/' + decoder.framesDup;
+  metric('m-frames').textContent = decoder.framesNew + '/' + decoder.framesDup + '/' + skippedFrames;
   metric('m-k').textContent = String(decoder.k);
   metric('m-block').textContent = decoder.blockLen + ' B';
   metric('m-payload').textContent = formatSize(decoder.totalLen);

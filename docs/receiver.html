@@ -192,7 +192,7 @@
     <div class="metric"><div class="k">decode</div><div class="v" id="m-dec">&ndash;</div></div>
     <div class="metric"><div class="k">goodput</div><div class="v" id="m-rate">&ndash;</div></div>
     <div class="metric"><div class="k">elapsed</div><div class="v" id="m-time">&ndash;</div></div>
-    <div class="metric"><div class="k">new/dup</div><div class="v" id="m-frames">&ndash;</div></div>
+    <div class="metric"><div class="k">new/dup/skip</div><div class="v" id="m-frames">&ndash;</div></div>
     <div class="metric"><div class="k">blocks</div><div class="v" id="m-k">&ndash;</div></div>
     <div class="metric"><div class="k">block len</div><div class="v" id="m-block">&ndash;</div></div>
     <div class="metric"><div class="k">payload</div><div class="v" id="m-payload">&ndash;</div></div>
@@ -10484,6 +10484,33 @@
   var decoding = false;
   var captureTimes = [];
   var decodeTimes = [];
+  var skippedFrames = 0;
+  var prevLum = null;
+  var SC_GRID = 20;
+  var SC_THRESH = 12;
+  function isFrameStable(data, w, h) {
+    const stepX = Math.max(1, w / SC_GRID | 0);
+    const stepY = Math.max(1, h / SC_GRID | 0);
+    const len = Math.ceil(h / stepY) * Math.ceil(w / stepX);
+    const lum = new Uint8Array(len);
+    let idx = 0;
+    for (let y = 0; y < h; y += stepY) {
+      const row = y * w;
+      for (let x = 0; x < w; x += stepX) {
+        const i = (row + x) * 4;
+        lum[idx++] = data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29 >> 8;
+      }
+    }
+    if (!prevLum || prevLum.length !== idx) {
+      prevLum = lum.slice(0, idx);
+      return true;
+    }
+    let diff = 0;
+    for (let i = 0; i < idx; i++) diff += Math.abs(lum[i] - prevLum[i]);
+    diff /= idx;
+    for (let i = 0; i < idx; i++) prevLum[i] = lum[i];
+    return diff < SC_THRESH;
+  }
   startBtn.onclick = () => start();
   async function start() {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -10559,6 +10586,10 @@
     const ctx = grab.getContext("2d", { willReadFrequently: true });
     ctx.drawImage(video, 0, 0);
     const img = ctx.getImageData(0, 0, vw, vh);
+    if (!isFrameStable(img.data, vw, vh)) {
+      skippedFrames++;
+      return;
+    }
     decoding = true;
     const qr = (0, import_jsqr.default)(img.data, vw, vh, { inversionAttempts: "dontInvert" });
     decoding = false;
@@ -10643,7 +10674,7 @@
     const kbs = decoder.framesNew * decoder.blockLen / OVERHEAD_EST / 1024 / Math.max(0.1, elapsed);
     metric("m-rate").textContent = kbs.toFixed(1) + " KB/s";
     metric("m-time").textContent = elapsed.toFixed(0) + "s";
-    metric("m-frames").textContent = decoder.framesNew + "/" + decoder.framesDup;
+    metric("m-frames").textContent = decoder.framesNew + "/" + decoder.framesDup + "/" + skippedFrames;
     metric("m-k").textContent = String(decoder.k);
     metric("m-block").textContent = decoder.blockLen + " B";
     metric("m-payload").textContent = formatSize(decoder.totalLen);
