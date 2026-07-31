@@ -1,13 +1,13 @@
 import { build } from 'esbuild';
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'fs';
 
-async function bundle(entry) {
+async function bundle(entry, minify = false) {
   const result = await build({
     entryPoints: [entry],
     bundle: true,
     format: 'iife',
     write: false,
-    minify: false,
+    minify,
     target: 'es2020',
     platform: 'browser',
   });
@@ -32,13 +32,26 @@ async function main() {
     receiverHtml.replace('<!-- BUNDLE -->', '<script>' + receiverJs + '<' + '/script>')
   );
 
+  // Minified variants: same pages, smallest possible files. The regular
+  // builds stay unminified so view-source stays readable.
+  const senderJsMin = await bundle('src/sender/main.js', true);
+  writeFileSync(
+    'dist/sender.min.html',
+    senderHtml.replace('<!-- BUNDLE -->', '<script>' + senderJsMin + '<' + '/script>')
+  );
+  const receiverJsMin = await bundle('src/receiver/main.js', true);
+  writeFileSync(
+    'dist/receiver.min.html',
+    receiverHtml.replace('<!-- BUNDLE -->', '<script>' + receiverJsMin + '<' + '/script>')
+  );
+
   copyFileSync('dist/sender.html', 'docs/sender.html');
   copyFileSync('dist/receiver.html', 'docs/receiver.html');
 
-  const senderSize = (Buffer.byteLength(readFileSync('dist/sender.html')) / 1024).toFixed(0);
-  const receiverSize = (Buffer.byteLength(readFileSync('dist/receiver.html')) / 1024).toFixed(0);
-  console.log('dist/sender.html   (' + senderSize + ' KB)');
-  console.log('dist/receiver.html (' + receiverSize + ' KB)');
+  for (const f of ['sender.html', 'receiver.html', 'sender.min.html', 'receiver.min.html']) {
+    const kb = (Buffer.byteLength(readFileSync('dist/' + f)) / 1024).toFixed(0);
+    console.log(('dist/' + f).padEnd(23) + '(' + kb + ' KB)');
+  }
   console.log('docs/ synced');
 }
 

@@ -1,0 +1,6 @@
+- generic [active] [ref=f2e1]:
+  - heading "screenbeam" [level=1] [ref=f2e2]
+  - generic [ref=f2e3]: optical file transfer
+  - generic [ref=f2e4] [cursor=pointer]:
+    - generic [ref=f2e5]: +
+    - generic [ref=f2e6]: Drop a file or tap to browse
