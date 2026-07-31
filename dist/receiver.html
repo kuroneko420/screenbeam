@@ -11109,29 +11109,75 @@
       }
     }
     if (!patTotal || patBad * 10 > patTotal) return null;
-    const refs = [
+    const cellCount = gridSize * gridSize;
+    const samples = new Float32Array(cellCount * 3);
+    const okMask = new Uint8Array(cellCount);
+    for (let gy = 0; gy < gridSize; gy++) {
+      for (let gx = 0; gx < gridSize; gx++) {
+        if (!sampleCell(gx, gy)) continue;
+        const i = gy * gridSize + gx;
+        samples[i * 3] = rgb[0];
+        samples[i * 3 + 1] = rgb[1];
+        samples[i * 3 + 2] = rgb[2];
+        okMask[i] = 1;
+      }
+    }
+    const lumOf = (r, g2, b) => (r * 77 + g2 * 150 + b * 29) / 256;
+    const chromaOf = (r, g2, b) => r - (g2 + b) / 2;
+    const blackLum = lumOf(black[0], black[1], black[2]);
+    const whiteLum = lumOf(white[0], white[1], white[2]);
+    const lumSpan = Math.max(30, whiteLum - blackLum);
+    const midL = (blackLum + whiteLum) / 2;
+    const blackC = chromaOf(black[0], black[1], black[2]);
+    const whiteC = chromaOf(white[0], white[1], white[2]);
+    const chromaFloor = 0.1 * lumSpan;
+    const sums = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
+    for (let i = 0; i < cellCount; i++) {
+      if (!okMask[i]) continue;
+      const r = samples[i * 3], g2 = samples[i * 3 + 1], b = samples[i * 3 + 2];
+      const L = lumOf(r, g2, b);
+      const t = Math.min(1, Math.max(0, (L - blackLum) / lumSpan));
+      const dC = chromaOf(r, g2, b) - (blackC + (whiteC - blackC) * t);
+      let cls;
+      if (dC > chromaFloor) cls = 2;
+      else if (dC < -chromaFloor) cls = 3;
+      else cls = L > midL ? 1 : 0;
+      const s = sums[cls];
+      s[0] += r;
+      s[1] += g2;
+      s[2] += b;
+      s[3]++;
+    }
+    const fallback = [
       black,
       white,
       [white[0], black[1], black[2]],
       [black[0], white[1], white[2]]
     ];
+    const means = [];
+    for (let c = 0; c < 4; c++) {
+      const s = sums[c];
+      means.push(s[3] >= 8 ? [s[0] / s[3], s[1] / s[3], s[2] / s[3]] : fallback[c]);
+    }
     const grid = Array.from({ length: gridSize }, () => new Uint8Array(gridSize));
     for (let gy = 0; gy < gridSize; gy++) {
       for (let gx = 0; gx < gridSize; gx++) {
-        if (!sampleCell(gx, gy)) {
+        const i = gy * gridSize + gx;
+        if (!okMask[i]) {
           grid[gy][gx] = 0;
           continue;
         }
+        const r = samples[i * 3], g2 = samples[i * 3 + 1], b = samples[i * 3 + 2];
         let best = 0;
         let bestDist = Infinity;
-        for (let i = 0; i < 4; i++) {
-          const dr = rgb[0] - refs[i][0];
-          const dg = rgb[1] - refs[i][1];
-          const db = rgb[2] - refs[i][2];
+        for (let c = 0; c < 4; c++) {
+          const dr = r - means[c][0];
+          const dg = g2 - means[c][1];
+          const db = b - means[c][2];
           const d = dr * dr + dg * dg + db * db;
           if (d < bestDist) {
             bestDist = d;
-            best = i;
+            best = c;
           }
         }
         grid[gy][gx] = best;

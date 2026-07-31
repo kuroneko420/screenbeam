@@ -757,34 +757,85 @@ export function sampleGrid(imageData, w, h, finders, gridSize) {
   }
   if (!patTotal || patBad * 10 > patTotal) return null;
 
-  // Red and cyan references built channel-wise from the measured extremes:
-  // a camera's white balance is roughly a per-channel gain, so red under
-  // this camera looks like (white R, black G, black B).
-  const refs = [
+  // Classify in two passes. Camera crosstalk and chroma subsampling
+  // desaturate red toward black and cyan toward white, so fixed reference
+  // colors misread hundreds of cells. Instead: pass 1 seeds classes from
+  // the red-vs-cyan opponent axis (which keeps its sign under those
+  // distortions), then the measured per-class averages become the
+  // references and pass 2 assigns every cell to its nearest average.
+  // Everything is re-measured from scratch on each frame.
+  const cellCount = gridSize * gridSize;
+  const samples = new Float32Array(cellCount * 3);
+  const okMask = new Uint8Array(cellCount);
+  for (let gy = 0; gy < gridSize; gy++) {
+    for (let gx = 0; gx < gridSize; gx++) {
+      if (!sampleCell(gx, gy)) continue;
+      const i = gy * gridSize + gx;
+      samples[i * 3] = rgb[0];
+      samples[i * 3 + 1] = rgb[1];
+      samples[i * 3 + 2] = rgb[2];
+      okMask[i] = 1;
+    }
+  }
+
+  const lumOf = (r, g, b) => (r * 77 + g * 150 + b * 29) / 256;
+  const chromaOf = (r, g, b) => r - (g + b) / 2;
+  const blackLum = lumOf(black[0], black[1], black[2]);
+  const whiteLum = lumOf(white[0], white[1], white[2]);
+  const lumSpan = Math.max(30, whiteLum - blackLum);
+  const midL = (blackLum + whiteLum) / 2;
+  const blackC = chromaOf(black[0], black[1], black[2]);
+  const whiteC = chromaOf(white[0], white[1], white[2]);
+  const chromaFloor = 0.1 * lumSpan;
+
+  const sums = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
+  for (let i = 0; i < cellCount; i++) {
+    if (!okMask[i]) continue;
+    const r = samples[i * 3], g = samples[i * 3 + 1], b = samples[i * 3 + 2];
+    const L = lumOf(r, g, b);
+    // the frame may have an overall tint, so compare each cell's chroma
+    // to the neutral baseline at its luminance
+    const t = Math.min(1, Math.max(0, (L - blackLum) / lumSpan));
+    const dC = chromaOf(r, g, b) - (blackC + (whiteC - blackC) * t);
+    let cls;
+    if (dC > chromaFloor) cls = 2;
+    else if (dC < -chromaFloor) cls = 3;
+    else cls = L > midL ? 1 : 0;
+    const s = sums[cls];
+    s[0] += r; s[1] += g; s[2] += b; s[3]++;
+  }
+
+  const fallback = [
     black,
     white,
     [white[0], black[1], black[2]],
     [black[0], white[1], white[2]],
   ];
+  const means = [];
+  for (let c = 0; c < 4; c++) {
+    const s = sums[c];
+    means.push(s[3] >= 8 ? [s[0] / s[3], s[1] / s[3], s[2] / s[3]] : fallback[c]);
+  }
 
   const grid = Array.from({ length: gridSize }, () => new Uint8Array(gridSize));
-
   for (let gy = 0; gy < gridSize; gy++) {
     for (let gx = 0; gx < gridSize; gx++) {
-      if (!sampleCell(gx, gy)) {
+      const i = gy * gridSize + gx;
+      if (!okMask[i]) {
         grid[gy][gx] = 0;
         continue;
       }
+      const r = samples[i * 3], g = samples[i * 3 + 1], b = samples[i * 3 + 2];
       let best = 0;
       let bestDist = Infinity;
-      for (let i = 0; i < 4; i++) {
-        const dr = rgb[0] - refs[i][0];
-        const dg = rgb[1] - refs[i][1];
-        const db = rgb[2] - refs[i][2];
+      for (let c = 0; c < 4; c++) {
+        const dr = r - means[c][0];
+        const dg = g - means[c][1];
+        const db = b - means[c][2];
         const d = dr * dr + dg * dg + db * db;
         if (d < bestDist) {
           bestDist = d;
-          best = i;
+          best = c;
         }
       }
       grid[gy][gx] = best;
