@@ -2,11 +2,11 @@
 
 Transfer files between devices with animated barcodes. One screen, one camera, zero network.
 
-Two things set it apart:
+Two things set it apart.
 
-**It is just HTML and JavaScript.** The sender and the receiver are two standalone HTML files. No install, no server, no build step, no WASM blobs. They work from a USB stick, an email attachment, or a locked-down machine where you cannot install anything. View source and every line is readable.
+First, it is just HTML and JavaScript. The sender and the receiver are two standalone HTML files. No install, no server, no build step, no WASM. They work from a USB stick or an email attachment, even on locked-down machines where you cannot install anything. View source and every line is readable.
 
-**jsColorGrid.** A custom 4-color barcode format built for this project and implemented from scratch: QR-style finder patterns, perspective correction, per-frame color calibration, Reed-Solomon error correction, and LT fountain coding, in dependency-free JavaScript. As far as we know, it is the first color screen-to-camera decoder written in pure browser JS. In real-world testing it moves files about 3x faster than QR mode on the same phone camera.
+Second, jsColorGrid: a custom 4-color barcode format built for this project and implemented from scratch, covering QR-style finder patterns, perspective correction, per-frame color calibration, Reed-Solomon error correction, and LT fountain coding in dependency-free JavaScript. As far as we know, it is the first color screen-to-camera decoder written in pure browser JS. On the same phone camera, it moved files about 3x faster than QR mode.
 
 ## How it works
 
@@ -22,13 +22,13 @@ Dropped frames do not matter. Each frame encodes an XOR of a pseudorandom subset
 
 ### jsColorGrid mode
 
-Every cell carries 2 bits using 4 colors: black, white, red, cyan. Three QR-style finder patterns plus an alignment pattern drive perspective correction. Each frame carries interleaved Reed-Solomon blocks, so a sprinkle of misread cells gets corrected instead of killing the frame, and a checksum drops anything worse. The receiver re-measures what the four colors actually look like through your camera on every single frame, which is what makes cheap cameras with white-balance drift, channel crosstalk, and chroma smearing workable.
+Every cell carries 2 bits using 4 colors: black, white, red, cyan. Three QR-style finder patterns and an alignment pattern let the receiver correct for perspective. Each frame carries interleaved Reed-Solomon blocks, so a sprinkle of misread cells gets corrected instead of killing the frame, and a checksum drops anything worse. The receiver re-measures what the four colors look like through your camera on every frame, which is how it copes with cheap cameras that shift and smear colors.
 
-QR mode is powered by jsQR and the qrcode package, the only third-party code in the project. jsColorGrid mode runs entirely on code written for this repo.
+QR mode uses jsQR and the qrcode package, the only third-party code in the project. jsColorGrid mode runs entirely on code written for this repo.
 
 ### Throughput
 
-Real numbers from a mid-range phone camera: jsColorGrid at grid 80 / 15 FPS moves about 9 KB/s. QR mode peaks around 3 KB/s on the same setup. Keep TX FPS at about half your camera's capture rate (default 15 for a 30 FPS camera). Pushing FPS higher backfires: the camera catches frames mid-transition and the receiver skips them.
+Measured on a mid-range phone camera: jsColorGrid at grid 80 / 15 FPS moves about 9 KB/s. QR mode peaks around 3 KB/s on the same setup. Keep TX FPS at about half your camera's capture rate (default 15 for a 30 FPS camera). Pushing FPS higher backfires: the camera catches frames mid-transition and the receiver skips them.
 
 ## Deployment
 
