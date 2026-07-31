@@ -1,7 +1,10 @@
-import jsQR from 'jsqr';
 import { LTDecoder } from '../shared/fountain.js';
 import { fnv1a, parseFrame } from '../shared/protocol.js';
-import { detectFinders, estimateGridSize, sampleGrid, decodeGrid, recoverFrame, unsealFrame } from '../shared/colorgrid.js';
+
+// Decoding runs in a Web Worker so capture never blocks on a slow decode.
+// The worker bundle is embedded at build time as base64 (see build.js), so
+// the receiver stays a single self-contained HTML file.
+const WORKER_B64 = '__WORKER_B64__';
 
 const OVERHEAD_EST = 1.18;
 
@@ -23,7 +26,8 @@ let sessionId = 0;
 let startTs = 0;
 let captureGen = 0;
 let done = false;
-let decoding = false;
+let worker = null;
+let workerBusy = false;
 
 const captureTimes = [];
 const decodeTimes = [];
@@ -75,6 +79,7 @@ async function start() {
   const captureWidth = Number(document.getElementById('cfg-width').value);
   const captureFps = Number(document.getElementById('cfg-capfps').value);
   decodeMode = document.getElementById('cfg-decmode').value;
+  ensureWorker();
 
   settings.style.display = 'none';
   startBtn.style.display = 'none';
@@ -136,33 +141,24 @@ function scheduleFrame(gen) {
 
 const grab = document.createElement('canvas');
 
-// Must match the sender's grid size options
-const COLOR_GRID_SIZES = [48, 64, 80, 96];
+// Cumulative counts of how far color frames get through the pipeline
+// (reported back by the worker): finders detected, grid size resolved,
+// sampling validated, checksum ok
+let colorStages = { find: 0, size: 0, valid: 0, ok: 0 };
 
-// Cumulative counts of how far color frames get through the pipeline:
-// finders detected, grid size resolved, sampling validated, checksum ok
-const colorStages = { find: 0, size: 0, valid: 0, ok: 0 };
-
-function tryColorDecode(imageData, w, h) {
-  const finders = detectFinders(imageData, w, h);
-  if (!finders) return null;
-  colorStages.find++;
-
-  const gridSize = estimateGridSize(finders, COLOR_GRID_SIZES);
-  if (!gridSize) return null;
-  colorStages.size++;
-
-  const grid = sampleGrid(imageData, w, h, finders, gridSize);
-  if (!grid) return null;
-  colorStages.valid++;
-
-  // recoverFrame fixes up to ~6% corrupted bytes via Reed-Solomon;
-  // unsealFrame then verifies the checksum so nothing corrupt survives
-  const sealed = recoverFrame(decodeGrid(gridSize, grid), gridSize);
-  if (!sealed) return null;
-  const frame = unsealFrame(sealed);
-  if (frame) colorStages.ok++;
-  return frame;
+function ensureWorker() {
+  if (worker) return;
+  const src = atob(WORKER_B64);
+  worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  worker.onmessage = (e) => {
+    workerBusy = false;
+    colorStages = e.data.stages;
+    if (e.data.frame) onDecoded(e.data.frame);
+  };
+  worker.onerror = (err) => {
+    workerBusy = false;
+    stats.textContent = 'Decode worker error: ' + (err.message || 'unknown');
+  };
 }
 
 function captureFrame() {
@@ -170,7 +166,12 @@ function captureFrame() {
   const vh = video.videoHeight;
   if (!vw || !vh) return;
   captureTimes.push(performance.now());
-  if (decoding) return;
+
+  // Worker still busy with the previous frame: drop this one
+  if (workerBusy) {
+    skippedFrames++;
+    return;
+  }
 
   if (grab.width !== vw || grab.height !== vh) {
     grab.width = vw;
@@ -180,29 +181,20 @@ function captureFrame() {
   ctx.drawImage(video, 0, 0);
   const img = ctx.getImageData(0, 0, vw, vh);
 
-  if (!isFrameStable(img.data, vw, vh)) {
+  // Shakycam gate applies to QR mode only. Color frames carry
+  // Reed-Solomon and a checksum, so a mid-transition frame is rejected
+  // safely by the decoder; attempting every frame beats guessing.
+  if (decodeMode !== 'color' && !isFrameStable(img.data, vw, vh)) {
     skippedFrames++;
     return;
   }
 
-  decoding = true;
-
-  // The two decoders are never stacked on one frame: color detection is
-  // expensive and a QR code's own corner markers match its signature, so
-  // running both would starve jsQR on phones
-  if (decodeMode === 'color') {
-    const colorResult = tryColorDecode(img.data, vw, vh);
-    decoding = false;
-    if (colorResult) onDecoded(colorResult);
-    return;
-  }
-
-  const qr = jsQR(img.data, vw, vh, { inversionAttempts: 'dontInvert' });
-  decoding = false;
-
-  if (qr && qr.binaryData && qr.binaryData.length > 0) {
-    onDecoded(new Uint8Array(qr.binaryData));
-  }
+  ensureWorker();
+  workerBusy = true;
+  worker.postMessage(
+    { mode: decodeMode, buf: img.data.buffer, w: vw, h: vh },
+    [img.data.buffer]
+  );
 }
 
 function onDecoded(bytes) {
@@ -233,6 +225,8 @@ function onDecoded(bytes) {
 function finish(payload, hashOk, seconds) {
   done = true;
   captureGen++;
+  worker?.terminate();
+  worker = null;
   stream?.getTracks().forEach(t => t.stop());
   preview.style.display = 'none';
   bar.style.width = '100%';

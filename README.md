@@ -2,6 +2,10 @@
 
 Transfer files between devices with animated barcodes. One screen, one camera, zero network.
 
+<p align="center">
+  <img src="docs/jscolorgrid-sender.jpg" width="300" alt="screenbeam sender streaming a 243 KB file in jsColorGrid mode on a phone">
+</p>
+
 Two things set it apart.
 
 First, it is just HTML and JavaScript. The sender and the receiver are two standalone HTML files. No install, no server, no build step, no WASM. They work from a USB stick or an email attachment, even on locked-down machines where you cannot install anything. View source and every line is readable.
