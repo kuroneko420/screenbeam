@@ -2,7 +2,7 @@
 
 Transfer files between devices using fountain-coded animated QR codes. One screen, one camera, zero network.
 
-The sender is a single 81 KB HTML file. Double-click it, pick a file, done. The receiver is 355 KB because it bundles a QR decoder. Two files, no install, no server.
+The sender is a single 88 KB HTML file. Double-click it, pick a file, done. The receiver is 375 KB because it bundles a QR decoder. Two files, no install, no server.
 
 Inspired by [decimen-optical-transfer](https://github.com/bashalarmistalt/decimen-optical-transfer), which needs a full Node.js + Vite + TypeScript + WASM toolchain running before anything happens. screenbeam compiles all of that down to two HTML files you can throw on a USB stick.
 
@@ -55,6 +55,9 @@ screenbeam/
     shared/
       protocol.js      Frame protocol, 20-byte header, FNV-1a, splitmix32
       fountain.js      LT fountain codes, encoder, decoder
+      colorgrid.js     4-color grid mode: finder detection, perspective
+                       sampling, per-frame calibration, frame checksum
+      rs.js            Reed-Solomon over GF(256) for color frames
     sender/            Sender source (uses qrcode)
     receiver/          Receiver source (uses jsQR)
   build.js             Bundles src/ into standalone HTML via esbuild

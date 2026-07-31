@@ -194,14 +194,15 @@
 
   <button id="start">Start Camera</button>
 
+  <div class="progress" id="progress" style="display:none"><div id="bar"></div></div>
+
   <div class="metrics" id="metrics" style="display:none">
     <div class="metric"><div class="k">capture</div><div class="v" id="m-cap">&ndash;</div></div>
     <div class="metric"><div class="k">decode</div><div class="v" id="m-dec">&ndash;</div></div>
     <div class="metric"><div class="k">goodput</div><div class="v" id="m-rate">&ndash;</div></div>
     <div class="metric"><div class="k">elapsed</div><div class="v" id="m-time">&ndash;</div></div>
     <div class="metric"><div class="k">new/dup/skip</div><div class="v" id="m-frames">&ndash;</div></div>
-    <div class="metric"><div class="k">blocks</div><div class="v" id="m-k">&ndash;</div></div>
-    <div class="metric"><div class="k">block len</div><div class="v" id="m-block">&ndash;</div></div>
+    <div class="metric"><div class="k">blocks x len</div><div class="v" id="m-k">&ndash;</div></div>
     <div class="metric"><div class="k">payload</div><div class="v" id="m-payload">&ndash;</div></div>
     <div class="metric"><div class="k">find/size/val/ok</div><div class="v" id="m-stages">&ndash;</div></div>
   </div>
@@ -209,8 +210,6 @@
   <div id="preview" style="display:none">
     <video id="video" muted playsinline></video>
   </div>
-
-  <div class="progress" id="progress" style="display:none"><div id="bar"></div></div>
 
   <div id="result"></div>
 

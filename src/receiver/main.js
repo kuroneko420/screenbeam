@@ -1,7 +1,7 @@
 import jsQR from 'jsqr';
 import { LTDecoder } from '../shared/fountain.js';
 import { fnv1a, parseFrame } from '../shared/protocol.js';
-import { detectFinders, estimateGridSize, sampleGrid, decodeGrid, unsealFrame } from '../shared/colorgrid.js';
+import { detectFinders, estimateGridSize, sampleGrid, decodeGrid, recoverFrame, unsealFrame } from '../shared/colorgrid.js';
 
 const OVERHEAD_EST = 1.18;
 
@@ -156,9 +156,11 @@ function tryColorDecode(imageData, w, h) {
   if (!grid) return null;
   colorStages.valid++;
 
-  // unsealFrame verifies the checksum: a single misread cell anywhere in
-  // the frame rejects it here instead of corrupting the fountain decoder
-  const frame = unsealFrame(decodeGrid(gridSize, grid));
+  // recoverFrame fixes up to ~6% corrupted bytes via Reed-Solomon;
+  // unsealFrame then verifies the checksum so nothing corrupt survives
+  const sealed = recoverFrame(decodeGrid(gridSize, grid), gridSize);
+  if (!sealed) return null;
+  const frame = unsealFrame(sealed);
   if (frame) colorStages.ok++;
   return frame;
 }
@@ -297,7 +299,6 @@ function updateStats() {
   metric('m-rate').textContent = kbs.toFixed(1) + ' KB/s';
   metric('m-time').textContent = elapsed.toFixed(0) + 's';
   metric('m-frames').textContent = decoder.framesNew + '/' + decoder.framesDup + '/' + skippedFrames;
-  metric('m-k').textContent = String(decoder.k);
-  metric('m-block').textContent = decoder.blockLen + ' B';
+  metric('m-k').textContent = decoder.k + ' x ' + decoder.blockLen + 'B';
   metric('m-payload').textContent = formatSize(decoder.totalLen);
 }

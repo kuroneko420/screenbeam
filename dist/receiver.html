@@ -194,14 +194,15 @@
 
   <button id="start">Start Camera</button>
 
+  <div class="progress" id="progress" style="display:none"><div id="bar"></div></div>
+
   <div class="metrics" id="metrics" style="display:none">
     <div class="metric"><div class="k">capture</div><div class="v" id="m-cap">&ndash;</div></div>
     <div class="metric"><div class="k">decode</div><div class="v" id="m-dec">&ndash;</div></div>
     <div class="metric"><div class="k">goodput</div><div class="v" id="m-rate">&ndash;</div></div>
     <div class="metric"><div class="k">elapsed</div><div class="v" id="m-time">&ndash;</div></div>
     <div class="metric"><div class="k">new/dup/skip</div><div class="v" id="m-frames">&ndash;</div></div>
-    <div class="metric"><div class="k">blocks</div><div class="v" id="m-k">&ndash;</div></div>
-    <div class="metric"><div class="k">block len</div><div class="v" id="m-block">&ndash;</div></div>
+    <div class="metric"><div class="k">blocks x len</div><div class="v" id="m-k">&ndash;</div></div>
     <div class="metric"><div class="k">payload</div><div class="v" id="m-payload">&ndash;</div></div>
     <div class="metric"><div class="k">find/size/val/ok</div><div class="v" id="m-stages">&ndash;</div></div>
   </div>
@@ -209,8 +210,6 @@
   <div id="preview" style="display:none">
     <video id="video" muted playsinline></video>
   </div>
-
-  <div class="progress" id="progress" style="display:none"><div id="bar"></div></div>
 
   <div id="result"></div>
 
@@ -10471,6 +10470,121 @@
     }
   };
 
+  // src/shared/rs.js
+  var EXP = new Uint8Array(512);
+  var LOG = new Uint8Array(256);
+  {
+    let x = 1;
+    for (let i = 0; i < 255; i++) {
+      EXP[i] = x;
+      LOG[x] = i;
+      x <<= 1;
+      if (x & 256) x ^= 285;
+    }
+    for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255];
+  }
+  function gfMul(a, b) {
+    if (a === 0 || b === 0) return 0;
+    return EXP[LOG[a] + LOG[b]];
+  }
+  function gfDiv(a, b) {
+    if (a === 0) return 0;
+    return EXP[(LOG[a] + 255 - LOG[b]) % 255];
+  }
+  function gfInv(a) {
+    return EXP[255 - LOG[a]];
+  }
+  function polyScale(p, x) {
+    const r = new Uint8Array(p.length);
+    for (let i = 0; i < p.length; i++) r[i] = gfMul(p[i], x);
+    return r;
+  }
+  function polyAdd(p, q) {
+    const r = new Uint8Array(Math.max(p.length, q.length));
+    for (let i = 0; i < p.length; i++) r[i + r.length - p.length] ^= p[i];
+    for (let i = 0; i < q.length; i++) r[i + r.length - q.length] ^= q[i];
+    return r;
+  }
+  function polyMul(p, q) {
+    const r = new Uint8Array(p.length + q.length - 1);
+    for (let j = 0; j < q.length; j++) {
+      for (let i = 0; i < p.length; i++) {
+        r[i + j] ^= gfMul(p[i], q[j]);
+      }
+    }
+    return r;
+  }
+  function polyEval(p, x) {
+    let y = p[0];
+    for (let i = 1; i < p.length; i++) y = gfMul(y, x) ^ p[i];
+    return y;
+  }
+  function rsDecode(msg, nsym) {
+    const synd = new Uint8Array(nsym);
+    let hasErr = 0;
+    for (let i = 0; i < nsym; i++) {
+      const s = polyEval(msg, EXP[i]);
+      synd[i] = s;
+      hasErr |= s;
+    }
+    if (!hasErr) return msg;
+    let errLoc = new Uint8Array([1]);
+    let oldLoc = new Uint8Array([1]);
+    for (let i = 0; i < nsym; i++) {
+      let delta = synd[i];
+      for (let j = 1; j < errLoc.length; j++) {
+        delta ^= gfMul(errLoc[errLoc.length - 1 - j], synd[i - j]);
+      }
+      const grown = new Uint8Array(oldLoc.length + 1);
+      grown.set(oldLoc);
+      oldLoc = grown;
+      if (delta !== 0) {
+        if (oldLoc.length > errLoc.length) {
+          const newLoc = polyScale(oldLoc, delta);
+          oldLoc = polyScale(errLoc, gfInv(delta));
+          errLoc = newLoc;
+        }
+        errLoc = polyAdd(errLoc, polyScale(oldLoc, delta));
+      }
+    }
+    let lead = 0;
+    while (lead < errLoc.length - 1 && errLoc[lead] === 0) lead++;
+    errLoc = errLoc.subarray(lead);
+    const errCount = errLoc.length - 1;
+    if (errCount === 0 || 2 * errCount > nsym) return null;
+    const errPos = [];
+    for (let i = 0; i < msg.length; i++) {
+      if (polyEval(errLoc, EXP[(255 - i) % 255]) === 0) {
+        errPos.push(msg.length - 1 - i);
+      }
+    }
+    if (errPos.length !== errCount) return null;
+    const syndRev = new Uint8Array(nsym);
+    for (let i = 0; i < nsym; i++) syndRev[i] = synd[nsym - 1 - i];
+    const full = polyMul(syndRev, errLoc);
+    const omega = full.subarray(full.length - nsym);
+    for (const pos of errPos) {
+      const xi = EXP[(255 - (msg.length - 1 - pos)) % 255];
+      let derivative = 0;
+      const deg = errLoc.length - 1;
+      for (let i = 0; i < errLoc.length; i++) {
+        const d = deg - i;
+        if (d & 1) {
+          derivative ^= gfMul(errLoc[i], EXP[LOG[xi] * (d - 1) % 255] || 1);
+        }
+      }
+      if (derivative === 0) return null;
+      const y = polyEval(omega, xi);
+      const xiPow = EXP[(msg.length - 1 - pos) % 255];
+      const magnitude = gfMul(xiPow, gfDiv(y, derivative));
+      msg[pos] ^= magnitude;
+    }
+    for (let i = 0; i < nsym; i++) {
+      if (polyEval(msg, EXP[i]) !== 0) return null;
+    }
+    return msg;
+  }
+
   // src/shared/colorgrid.js
   var FINDER_SIZE = 7;
   var QUIET = 1;
@@ -10533,6 +10647,26 @@
   }
   function bytesPerFrame(gridSize) {
     return Math.floor(dataCellCount(gridSize) * 2 / 8);
+  }
+  function rsParams(gridSize) {
+    const capacity = bytesPerFrame(gridSize);
+    const blocks = Math.ceil(capacity / 255);
+    const total = Math.floor(capacity / blocks);
+    const nsym = 2 * Math.round(total / 16);
+    return { blocks, total, nsym, data: total - nsym };
+  }
+  function recoverFrame(raw, gridSize) {
+    const { blocks, total, nsym, data } = rsParams(gridSize);
+    if (raw.length < blocks * total) return null;
+    const out = new Uint8Array(blocks * data);
+    for (let b = 0; b < blocks; b++) {
+      const code = new Uint8Array(total);
+      for (let i = 0; i < total; i++) code[i] = raw[i * blocks + b];
+      const fixed = rsDecode(code, nsym);
+      if (!fixed) return null;
+      out.set(fixed.subarray(0, data), b * data);
+    }
+    return out;
   }
   function unsealFrame(bytes) {
     if (bytes.length < HEADER_LEN + SEAL_LEN + 1) return null;
@@ -11130,7 +11264,9 @@
     const grid = sampleGrid(imageData, w, h, finders, gridSize);
     if (!grid) return null;
     colorStages.valid++;
-    const frame = unsealFrame(decodeGrid(gridSize, grid));
+    const sealed = recoverFrame(decodeGrid(gridSize, grid), gridSize);
+    if (!sealed) return null;
+    const frame = unsealFrame(sealed);
     if (frame) colorStages.ok++;
     return frame;
   }
@@ -11243,8 +11379,7 @@
     metric("m-rate").textContent = kbs.toFixed(1) + " KB/s";
     metric("m-time").textContent = elapsed.toFixed(0) + "s";
     metric("m-frames").textContent = decoder.framesNew + "/" + decoder.framesDup + "/" + skippedFrames;
-    metric("m-k").textContent = String(decoder.k);
-    metric("m-block").textContent = decoder.blockLen + " B";
+    metric("m-k").textContent = decoder.k + " x " + decoder.blockLen + "B";
     metric("m-payload").textContent = formatSize(decoder.totalLen);
   }
 })();

@@ -2433,6 +2433,59 @@
     }
   };
 
+  // src/shared/rs.js
+  var EXP = new Uint8Array(512);
+  var LOG = new Uint8Array(256);
+  {
+    let x = 1;
+    for (let i = 0; i < 255; i++) {
+      EXP[i] = x;
+      LOG[x] = i;
+      x <<= 1;
+      if (x & 256) x ^= 285;
+    }
+    for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255];
+  }
+  function gfMul(a, b) {
+    if (a === 0 || b === 0) return 0;
+    return EXP[LOG[a] + LOG[b]];
+  }
+  function polyMul(p, q) {
+    const r = new Uint8Array(p.length + q.length - 1);
+    for (let j = 0; j < q.length; j++) {
+      for (let i = 0; i < p.length; i++) {
+        r[i + j] ^= gfMul(p[i], q[j]);
+      }
+    }
+    return r;
+  }
+  var genCache = /* @__PURE__ */ new Map();
+  function generator(nsym) {
+    let g = genCache.get(nsym);
+    if (g) return g;
+    g = new Uint8Array([1]);
+    for (let i = 0; i < nsym; i++) {
+      g = polyMul(g, new Uint8Array([1, EXP[i]]));
+    }
+    genCache.set(nsym, g);
+    return g;
+  }
+  function rsEncode(data, nsym) {
+    const gen = generator(nsym);
+    const out = new Uint8Array(data.length + nsym);
+    out.set(data);
+    for (let i = 0; i < data.length; i++) {
+      const coef = out[i];
+      if (coef !== 0) {
+        for (let j = 1; j < gen.length; j++) {
+          out[i + j] ^= gfMul(gen[j], coef);
+        }
+      }
+    }
+    out.set(data);
+    return out;
+  }
+
   // src/shared/colorgrid.js
   var FINDER_SIZE = 7;
   var QUIET = 1;
@@ -2495,6 +2548,28 @@
   }
   function bytesPerFrame(gridSize) {
     return Math.floor(dataCellCount(gridSize) * 2 / 8);
+  }
+  function rsParams(gridSize) {
+    const capacity = bytesPerFrame(gridSize);
+    const blocks = Math.ceil(capacity / 255);
+    const total = Math.floor(capacity / blocks);
+    const nsym = 2 * Math.round(total / 16);
+    return { blocks, total, nsym, data: total - nsym };
+  }
+  function colorFrameCapacity(gridSize) {
+    const p = rsParams(gridSize);
+    return p.blocks * p.data;
+  }
+  function protectFrame(sealed, gridSize) {
+    const { blocks, total, nsym, data } = rsParams(gridSize);
+    const padded = new Uint8Array(blocks * data);
+    padded.set(sealed.subarray(0, padded.length));
+    const out = new Uint8Array(blocks * total);
+    for (let b = 0; b < blocks; b++) {
+      const code = rsEncode(padded.subarray(b * data, (b + 1) * data), nsym);
+      for (let i = 0; i < total; i++) out[i * blocks + b] = code[i];
+    }
+    return out;
   }
   function sealFrame(frame) {
     const out = new Uint8Array(frame.length + SEAL_LEN);
@@ -2723,7 +2798,7 @@
     const txFps = Number(cfgFps.value);
     const displayPx = Number(cfgSize.value);
     const gridSize = cfgGrid ? Number(cfgGrid.value) : COLOR_GRID_SIZE;
-    const colorFrameBytes = bytesPerFrame(gridSize);
+    const colorFrameBytes = colorFrameCapacity(gridSize);
     const blockLen = colorFrameBytes - HEADER_LEN - SEAL_LEN;
     const sessionId = Math.floor(Math.random() * 65535) + 1 & 65535;
     const encoder = new LTEncoder(payload, blockLen, sessionId);
@@ -2756,7 +2831,7 @@
     const queue = [];
     let nextSeq = 0;
     const makeFrame = () => {
-      const frameData = sealFrame(packFrame({ ...header, seq: nextSeq }, encoder.encode(nextSeq)));
+      const frameData = protectFrame(sealFrame(packFrame({ ...header, seq: nextSeq }, encoder.encode(nextSeq))), gridSize);
       nextSeq++;
       const grid = encodeGrid(gridSize, frameData);
       const img = new ImageData(total, total);

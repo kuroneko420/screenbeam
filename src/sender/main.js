@@ -1,7 +1,7 @@
 import QRCode from 'qrcode';
 import { LTEncoder } from '../shared/fountain.js';
 import { HEADER_LEN, fnv1a, packFrame } from '../shared/protocol.js';
-import { SEAL_LEN, bytesPerFrame, encodeGrid, sealFrame } from '../shared/colorgrid.js';
+import { SEAL_LEN, colorFrameCapacity, encodeGrid, sealFrame, protectFrame } from '../shared/colorgrid.js';
 
 const MARGIN = 4;
 const LOOKAHEAD = 3;
@@ -188,7 +188,7 @@ function startColorStream(gen, payload) {
   const txFps = Number(cfgFps.value);
   const displayPx = Number(cfgSize.value);
   const gridSize = cfgGrid ? Number(cfgGrid.value) : COLOR_GRID_SIZE;
-  const colorFrameBytes = bytesPerFrame(gridSize);
+  const colorFrameBytes = colorFrameCapacity(gridSize);
   const blockLen = colorFrameBytes - HEADER_LEN - SEAL_LEN;
 
   const sessionId = (Math.floor(Math.random() * 0xffff) + 1) & 0xffff;
@@ -231,7 +231,7 @@ function startColorStream(gen, payload) {
   let nextSeq = 0;
 
   const makeFrame = () => {
-    const frameData = sealFrame(packFrame({ ...header, seq: nextSeq }, encoder.encode(nextSeq)));
+    const frameData = protectFrame(sealFrame(packFrame({ ...header, seq: nextSeq }, encoder.encode(nextSeq))), gridSize);
     nextSeq++;
     const grid = encodeGrid(gridSize, frameData);
     const img = new ImageData(total, total);

@@ -27,6 +27,7 @@
 // dropped frames cheap.
 
 import { HEADER_LEN, fnv1a } from './protocol.js';
+import { rsEncode, rsDecode } from './rs.js';
 
 export const COLORS = [
   [0, 0, 0],
@@ -114,6 +115,55 @@ export function dataCellCount(gridSize) {
 
 export function bytesPerFrame(gridSize) {
   return Math.floor(dataCellCount(gridSize) * 2 / 8);
+}
+
+// Reed-Solomon layout for a grid: the frame capacity is split into
+// `blocks` interleaved RS codewords of `total` bytes (max 255), each
+// carrying `nsym` parity bytes (~12.5%, correcting ~6% byte errors per
+// block). Interleaving spreads camera error bursts, which hit
+// neighboring cells and therefore neighboring bytes, across blocks.
+// Up to blocks-1 leftover bytes of capacity go unused.
+export function rsParams(gridSize) {
+  const capacity = bytesPerFrame(gridSize);
+  const blocks = Math.ceil(capacity / 255);
+  const total = Math.floor(capacity / blocks);
+  const nsym = 2 * Math.round(total / 16);
+  return { blocks, total, nsym, data: total - nsym };
+}
+
+// Usable payload bytes per color frame (sealed frame size the sender packs)
+export function colorFrameCapacity(gridSize) {
+  const p = rsParams(gridSize);
+  return p.blocks * p.data;
+}
+
+// Sealed frame -> interleaved RS codewords ready for encodeGrid.
+export function protectFrame(sealed, gridSize) {
+  const { blocks, total, nsym, data } = rsParams(gridSize);
+  const padded = new Uint8Array(blocks * data);
+  padded.set(sealed.subarray(0, padded.length));
+  const out = new Uint8Array(blocks * total);
+  for (let b = 0; b < blocks; b++) {
+    const code = rsEncode(padded.subarray(b * data, (b + 1) * data), nsym);
+    for (let i = 0; i < total; i++) out[i * blocks + b] = code[i];
+  }
+  return out;
+}
+
+// Raw decoded grid bytes -> corrected sealed frame, or null when any
+// block has more errors than its parity can fix.
+export function recoverFrame(raw, gridSize) {
+  const { blocks, total, nsym, data } = rsParams(gridSize);
+  if (raw.length < blocks * total) return null;
+  const out = new Uint8Array(blocks * data);
+  for (let b = 0; b < blocks; b++) {
+    const code = new Uint8Array(total);
+    for (let i = 0; i < total; i++) code[i] = raw[i * blocks + b];
+    const fixed = rsDecode(code, nsym);
+    if (!fixed) return null;
+    out.set(fixed.subarray(0, data), b * data);
+  }
+  return out;
 }
 
 // Append a 4-byte FNV-1a checksum to a packed protocol frame.
