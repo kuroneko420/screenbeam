@@ -26,8 +26,7 @@ let sessionId = 0;
 let startTs = 0;
 let captureGen = 0;
 let done = false;
-let worker = null;
-let workerBusy = false;
+let workers = [];
 
 const captureTimes = [];
 const decodeTimes = [];
@@ -79,7 +78,7 @@ async function start() {
   const captureWidth = Number(document.getElementById('cfg-width').value);
   const captureFps = Number(document.getElementById('cfg-capfps').value);
   decodeMode = document.getElementById('cfg-decmode').value;
-  ensureWorker();
+  ensureWorkers();
 
   settings.style.display = 'none';
   startBtn.style.display = 'none';
@@ -141,24 +140,63 @@ function scheduleFrame(gen) {
 
 const grab = document.createElement('canvas');
 
-// Cumulative counts of how far color frames get through the pipeline
-// (reported back by the worker): finders detected, grid size resolved,
-// sampling validated, checksum ok
-let colorStages = { find: 0, size: 0, valid: 0, ok: 0 };
+// Cumulative counts of how far color frames get through the pipeline:
+// finders detected, grid size resolved, sampling validated, checksum ok
+const colorStages = { find: 0, size: 0, valid: 0, ok: 0 };
 
-function ensureWorker() {
-  if (worker) return;
+// The code's last known position in camera coordinates. The main thread
+// owns this so it can grab only that region from the camera, which cuts
+// the per-frame copy and detection cost several-fold once locked on.
+let roi = null;
+let roiMisses = 0;
+const ROI_MAX_MISSES = 6;
+
+function clampRoi(w, h) {
+  if (!roi) return null;
+  const x0 = Math.max(0, Math.floor(roi.x0));
+  const y0 = Math.max(0, Math.floor(roi.y0));
+  const x1 = Math.min(w, Math.ceil(roi.x1));
+  const y1 = Math.min(h, Math.ceil(roi.y1));
+  if (x1 - x0 < 64 || y1 - y0 < 64) return null;
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+function onWorkerResult(slot, e) {
+  slot.busy = false;
+  const { frame, roi: foundRoi, st } = e.data;
+  if (st) {
+    if (st.find) colorStages.find++;
+    if (st.size) colorStages.size++;
+    if (st.valid) colorStages.valid++;
+    if (st.ok) colorStages.ok++;
+  }
+  if (decodeMode === 'color') {
+    if (foundRoi) {
+      roi = foundRoi;
+      roiMisses = 0;
+    } else if (slot.cropped) {
+      roiMisses++;
+      if (roiMisses > ROI_MAX_MISSES) roi = null;
+    }
+  }
+  if (frame) onDecoded(frame);
+}
+
+function ensureWorkers() {
+  if (workers.length) return;
+  // Leave cores for the camera pipeline and main thread
+  const n = Math.min(3, Math.max(1, (navigator.hardwareConcurrency || 4) - 2));
   const src = atob(WORKER_B64);
-  worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
-  worker.onmessage = (e) => {
-    workerBusy = false;
-    colorStages = e.data.stages;
-    if (e.data.frame) onDecoded(e.data.frame);
-  };
-  worker.onerror = (err) => {
-    workerBusy = false;
-    stats.textContent = 'Decode worker error: ' + (err.message || 'unknown');
-  };
+  const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+  for (let i = 0; i < n; i++) {
+    const slot = { w: new Worker(url), busy: false, cropped: false };
+    slot.w.onmessage = (e) => onWorkerResult(slot, e);
+    slot.w.onerror = (err) => {
+      slot.busy = false;
+      stats.textContent = 'Decode worker error: ' + (err.message || 'unknown');
+    };
+    workers.push(slot);
+  }
 }
 
 function captureFrame() {
@@ -167,8 +205,9 @@ function captureFrame() {
   if (!vw || !vh) return;
   captureTimes.push(performance.now());
 
-  // Worker still busy with the previous frame: drop this one
-  if (workerBusy) {
+  // All workers busy: drop this frame
+  const slot = workers.find(s => !s.busy);
+  if (!slot) {
     skippedFrames++;
     return;
   }
@@ -179,7 +218,12 @@ function captureFrame() {
   }
   const ctx = grab.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(video, 0, 0);
-  const img = ctx.getImageData(0, 0, vw, vh);
+
+  // Once locked on in color mode, grab only the code's region
+  const rect = decodeMode === 'color' ? clampRoi(vw, vh) : null;
+  const img = rect
+    ? ctx.getImageData(rect.x, rect.y, rect.w, rect.h)
+    : ctx.getImageData(0, 0, vw, vh);
 
   // Shakycam gate applies to QR mode only. Color frames carry
   // Reed-Solomon and a checksum, so a mid-transition frame is rejected
@@ -189,10 +233,17 @@ function captureFrame() {
     return;
   }
 
-  ensureWorker();
-  workerBusy = true;
-  worker.postMessage(
-    { mode: decodeMode, buf: img.data.buffer, w: vw, h: vh },
+  slot.busy = true;
+  slot.cropped = !!rect;
+  slot.w.postMessage(
+    {
+      mode: decodeMode,
+      buf: img.data.buffer,
+      w: img.width,
+      h: img.height,
+      offX: rect ? rect.x : 0,
+      offY: rect ? rect.y : 0,
+    },
     [img.data.buffer]
   );
 }
@@ -225,8 +276,8 @@ function onDecoded(bytes) {
 function finish(payload, hashOk, seconds) {
   done = true;
   captureGen++;
-  worker?.terminate();
-  worker = null;
+  for (const s of workers) s.w.terminate();
+  workers = [];
   stream?.getTracks().forEach(t => t.stop());
   preview.style.display = 'none';
   bar.style.width = '100%';
