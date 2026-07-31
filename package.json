@@ -1,7 +1,8 @@
 {
   "name": "screenbeam",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "description": "File transfer between devices using fountain-coded QR codes. Screen to camera, no network.",
   "scripts": {

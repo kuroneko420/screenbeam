@@ -1,4 +1,7 @@
-// 4-color grid encoder/decoder.
+// jsColorGrid: 4-color matrix barcode encoder/decoder in pure JavaScript.
+// Author: kuroneko420 (https://github.com/kuroneko420)
+// Part of screenbeam (https://github.com/kuroneko420/screenbeam)
+//
 // Each cell encodes 2 bits using 4 colors:
 //   0 = black   (0,0,0)
 //   1 = white   (255,255,255)

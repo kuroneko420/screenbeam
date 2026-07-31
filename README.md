@@ -1,32 +1,40 @@
 # screenbeam
 
-Transfer files between devices using fountain-coded animated QR codes. One screen, one camera, zero network.
+Transfer files between devices with animated barcodes. One screen, one camera, zero network.
 
-The sender is a single 88 KB HTML file. Double-click it, pick a file, done. The receiver is 375 KB because it bundles a QR decoder. Two files, no install, no server.
+Two things set it apart:
 
-Inspired by [decimen-optical-transfer](https://github.com/bashalarmistalt/decimen-optical-transfer), which needs a full Node.js + Vite + TypeScript + WASM toolchain running before anything happens. screenbeam compiles all of that down to two HTML files you can throw on a USB stick.
+**It is just HTML and JavaScript.** The sender and the receiver are two standalone HTML files. No install, no server, no build step, no WASM blobs. They work from a USB stick, an email attachment, or a locked-down machine where you cannot install anything. View source and every line is readable.
+
+**jsColorGrid.** A custom 4-color barcode format built for this project and implemented from scratch: QR-style finder patterns, perspective correction, per-frame color calibration, Reed-Solomon error correction, and LT fountain coding, in dependency-free JavaScript. As far as we know, it is the first color screen-to-camera decoder written in pure browser JS. In real-world testing it moves files about 3x faster than QR mode on the same phone camera.
 
 ## How it works
 
 1. Open `sender.html` on any device with a screen. Pick a file.
-2. Open `receiver.html` on any device with a camera. Tap "Start Camera."
-3. Point the camera at the QR stream. The file reconstructs and downloads.
+2. Open `receiver.html` on any device with a camera. Pick the matching mode and tap "Start Camera."
+3. Point the camera at the stream. The file reconstructs and downloads.
 
 The sender does not know the receiver exists. There is no pairing and no handshake.
 
 ### Fountain codes
 
-Dropped frames do not matter. Each QR frame encodes an XOR of a pseudorandom subset of the file's blocks using a robust-soliton distribution (Luby transform). The receiver needs roughly K x 1.15 distinct frames in any order to reconstruct the file. Miss a frame and it takes slightly longer. There is no retransmission and no back-channel.
+Dropped frames do not matter. Each frame encodes an XOR of a pseudorandom subset of the file's blocks using a robust-soliton distribution (Luby transform). The receiver needs roughly K x 1.15 distinct frames in any order to reconstruct the file. Miss a frame and it takes slightly longer. There is no retransmission and no back-channel.
+
+### jsColorGrid mode
+
+Every cell carries 2 bits using 4 colors: black, white, red, cyan. Three QR-style finder patterns plus an alignment pattern drive perspective correction. Each frame carries interleaved Reed-Solomon blocks, so a sprinkle of misread cells gets corrected instead of killing the frame, and a checksum drops anything worse. The receiver re-measures what the four colors actually look like through your camera on every single frame, which is what makes cheap cameras with white-balance drift, channel crosstalk, and chroma smearing workable.
+
+QR mode is powered by jsQR and the qrcode package, the only third-party code in the project. jsColorGrid mode runs entirely on code written for this repo.
 
 ### Throughput
 
-QR Version 27 at 24 FPS gives about 28 KB/s. A 512 KB file takes roughly 10-25 seconds depending on camera quality, lighting, and distance. You can push it to V40 / 30 FPS for denser codes at close range, though that needs a steady phone and good lighting.
+Real numbers from a mid-range phone camera: jsColorGrid at grid 80 / 15 FPS moves about 9 KB/s. QR mode peaks around 3 KB/s on the same setup. Keep TX FPS at about half your camera's capture rate (default 15 for a 30 FPS camera). Pushing FPS higher backfires: the camera catches frames mid-transition and the receiver skips them.
 
 ## Deployment
 
 ### Sender
 
-The sender has no restrictions. It works from `file://`, USB drives, email attachments. Open the HTML in any browser on any OS and the QR stream starts as soon as you pick a file.
+The sender has no restrictions. It works from `file://`, USB drives, email attachments. Open the HTML in any browser on any OS and the stream starts as soon as you pick a file.
 
 ### Receiver (HTTPS caveat)
 
@@ -48,18 +56,18 @@ For airgapped systems where the receiver has no internet:
 ```
 screenbeam/
   dist/
-    sender.html        81 KB, works from file://
-    receiver.html     355 KB, needs secure context for camera
+    sender.html        works from file://
+    receiver.html      needs secure context for camera
   docs/                GitHub Pages (same files + landing page)
   src/
     shared/
       protocol.js      Frame protocol, 20-byte header, FNV-1a, splitmix32
       fountain.js      LT fountain codes, encoder, decoder
-      colorgrid.js     4-color grid mode: finder detection, perspective
-                       sampling, per-frame calibration, frame checksum
-      rs.js            Reed-Solomon over GF(256) for color frames
-    sender/            Sender source (uses qrcode)
-    receiver/          Receiver source (uses jsQR)
+      colorgrid.js     jsColorGrid: finder detection, perspective
+                       sampling, per-frame color calibration, checksum
+      rs.js            Reed-Solomon over GF(256) for jsColorGrid frames
+    sender/            Sender source (uses qrcode for QR mode)
+    receiver/          Receiver source (uses jsQR for QR mode)
   build.js             Bundles src/ into standalone HTML via esbuild
   send-file.vbs        Power Automate Desktop helper for locked-down environments
 ```
@@ -79,16 +87,20 @@ Output goes to `dist/` and `docs/`.
 
 Sender (adjustable in the Settings panel):
 
-- TX FPS: 10-60 (default 24)
-- Bytes per frame: 500-2953 (default 1465, QR V27)
-- Error correction: L/M/Q/H (default L, the fountain layer already handles dropped frames)
+- Mode: QR (B&W) or jsColorGrid (4-color)
+- TX FPS: 10-60 (default 15)
+- Grid size: 48-96 (jsColorGrid only, default 64)
+- Bytes per frame and error correction (QR mode only)
 - Display size: 300-1200px
 
 Receiver (set before starting camera):
 
+- Mode: must match the sender
 - Capture width: 960/1280/1920 (default 1280)
 - Capture FPS: 30/60 (default 60)
 
 ## License
 
-MIT
+screenbeam's own code is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md): use it, modify it, share it freely for any noncommercial purpose. For commercial licensing, open an issue.
+
+Bundled third-party components keep their own licenses: jsQR (Apache 2.0) and qrcode (MIT), both used only by QR mode.

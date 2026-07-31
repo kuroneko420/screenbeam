@@ -1,4 +1,6 @@
 // Reed-Solomon over GF(256), polynomial 0x11d (same field as QR codes).
+// Part of jsColorGrid / screenbeam by kuroneko420
+// (https://github.com/kuroneko420)
 // Encoder appends nsym parity bytes; decoder corrects up to nsym/2
 // corrupted bytes anywhere in the codeword, or returns null when the
 // damage exceeds that.
