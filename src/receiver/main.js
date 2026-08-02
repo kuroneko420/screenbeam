@@ -199,6 +199,11 @@ function ensureWorkers() {
   }
 }
 
+// The decoder only needs ~7 camera pixels per cell; a code that fills the
+// camera view carries far more. Downscaling the locked-on grab to this
+// width caps the per-frame copy cost no matter how large the code appears.
+const TARGET_CROP_W = 720;
+
 function captureFrame() {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
@@ -212,23 +217,29 @@ function captureFrame() {
     return;
   }
 
-  if (grab.width !== vw || grab.height !== vh) {
-    grab.width = vw;
-    grab.height = vh;
+  // Once locked on in color mode, grab only the code's region, shrunk to
+  // the working size while copying (the canvas scales during drawImage)
+  const rect = decodeMode === 'color' ? clampRoi(vw, vh) : null;
+  const scale = rect ? Math.min(1, TARGET_CROP_W / rect.w) : 1;
+  const gw = rect ? Math.max(64, Math.round(rect.w * scale)) : vw;
+  const gh = rect ? Math.max(64, Math.round(rect.h * (gw / rect.w))) : vh;
+
+  if (grab.width !== gw || grab.height !== gh) {
+    grab.width = gw;
+    grab.height = gh;
   }
   const ctx = grab.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(video, 0, 0);
-
-  // Once locked on in color mode, grab only the code's region
-  const rect = decodeMode === 'color' ? clampRoi(vw, vh) : null;
-  const img = rect
-    ? ctx.getImageData(rect.x, rect.y, rect.w, rect.h)
-    : ctx.getImageData(0, 0, vw, vh);
+  if (rect) {
+    ctx.drawImage(video, rect.x, rect.y, rect.w, rect.h, 0, 0, gw, gh);
+  } else {
+    ctx.drawImage(video, 0, 0);
+  }
+  const img = ctx.getImageData(0, 0, gw, gh);
 
   // Shakycam gate applies to QR mode only. Color frames carry
   // Reed-Solomon and a checksum, so a mid-transition frame is rejected
   // safely by the decoder; attempting every frame beats guessing.
-  if (decodeMode !== 'color' && !isFrameStable(img.data, vw, vh)) {
+  if (decodeMode !== 'color' && !isFrameStable(img.data, gw, gh)) {
     skippedFrames++;
     return;
   }
@@ -239,10 +250,11 @@ function captureFrame() {
     {
       mode: decodeMode,
       buf: img.data.buffer,
-      w: img.width,
-      h: img.height,
+      w: gw,
+      h: gh,
       offX: rect ? rect.x : 0,
       offY: rect ? rect.y : 0,
+      scale: rect ? gw / rect.w : 1,
     },
     [img.data.buffer]
   );

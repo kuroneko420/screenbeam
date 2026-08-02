@@ -16,8 +16,9 @@ const COLOR_GRID_SIZES = [48, 64, 80, 96];
 
 // Bounding box of the detected finder centers, padded enough to cover the
 // whole grid (the bottom-right corner extends beyond the centers) plus
-// room for hand jitter. offX/offY translate crop to camera coordinates.
-function roiFromFinders(finders, offX, offY) {
+// room for hand jitter. The image may be a downscaled crop of the camera
+// frame: offX/offY and scale map it back to camera coordinates.
+function roiFromFinders(finders, offX, offY, scale) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const f of finders) {
     x0 = Math.min(x0, f.x); y0 = Math.min(y0, f.y);
@@ -25,20 +26,23 @@ function roiFromFinders(finders, offX, offY) {
   }
   const pad = 0.3 * Math.max(x1 - x0, y1 - y0) + 16;
   return {
-    x0: offX + x0 - pad,
-    y0: offY + y0 - pad,
-    x1: offX + x1 + pad,
-    y1: offY + y1 + pad,
+    x0: offX + (x0 - pad) / scale,
+    y0: offY + (y0 - pad) / scale,
+    x1: offX + (x1 + pad) / scale,
+    y1: offY + (y1 + pad) / scale,
   };
 }
 
-export function decodeColorJob(data, w, h, offX, offY) {
+export function decodeColorJob(data, w, h, offX, offY, scale) {
+  offX = offX || 0;
+  offY = offY || 0;
+  scale = scale || 1;
   const st = { find: false, size: false, valid: false, ok: false };
 
   const finders = detectFinders(data, w, h);
   if (!finders) return { frame: null, roi: null, st };
   st.find = true;
-  const roi = roiFromFinders(finders, offX, offY);
+  const roi = roiFromFinders(finders, offX, offY, scale);
 
   const gridSize = estimateGridSize(finders, COLOR_GRID_SIZES);
   if (!gridSize) return { frame: null, roi, st };
@@ -64,10 +68,10 @@ export function decodeQR(data, w, h) {
 
 if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.onmessage = (e) => {
-    const { mode, buf, w, h, offX, offY } = e.data;
+    const { mode, buf, w, h, offX, offY, scale } = e.data;
     const data = new Uint8ClampedArray(buf);
     if (mode === 'color') {
-      const res = decodeColorJob(data, w, h, offX || 0, offY || 0);
+      const res = decodeColorJob(data, w, h, offX || 0, offY || 0, scale || 1);
       self.postMessage(
         { frame: res.frame, roi: res.roi, st: res.st },
         res.frame ? [res.frame.buffer] : []
